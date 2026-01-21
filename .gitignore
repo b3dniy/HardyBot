@@ -1,0 +1,85 @@
+# Локальные переменные окружения (секреты)
+.env
+.env.*
+!.env.example
+
+# Локальная БД в корне репозитория
+/bot.db
+*.db
+*.sqlite
+*.sqlite3
+
+# Логи/временные данные (если появятся)
+*.log
+/logs/
+/log/
+/tmp/
+/runtime/
+
+############################################
+# PYTHON
+############################################
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*.pyd
+*.pyo
+
+# Pytest / coverage
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Packaging / build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+wheels/
+pip-wheel-metadata/
+
+# Type checkers / linters
+.mypy_cache/
+.pyre/
+.ruff_cache/
+
+############################################
+# IDE / EDITORS
+############################################
+
+# VS Code
+.vscode/
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# JetBrains
+.idea/
+*.iml
+
+# Vim/Swap
+*.swp
+*.swo
+*~
+
+############################################
+# OS FILES
+############################################
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/

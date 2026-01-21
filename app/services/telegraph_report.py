@@ -1,0 +1,412 @@
+# app/services/telegraph_report.py
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Optional, Sequence, List, Dict, Any
+from collections import defaultdict
+from datetime import datetime, date
+import json
+from io import BytesIO
+import logging
+
+import aiohttp
+from aiogram import Bot
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+
+from app.models import Task, Attachment
+
+
+logger = logging.getLogger(__name__)
+
+TELEGRAPH_API_URL = "https://api.telegra.ph"
+TELEGRAPH_UPLOAD_URL = "https://telegra.ph/upload"
+
+
+@dataclass
+class TelegraphConfig:
+    access_token: str
+    author_name: str = "HardyBot"
+    author_url: Optional[str] = None
+
+
+class TelegraphClient:
+    def __init__(self, config: TelegraphConfig) -> None:
+        self.config = config
+
+    # ============ низкоуровневые запросы ============
+
+    async def _request(self, method: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        url = f"{TELEGRAPH_API_URL}/{method}"
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, data=params) as resp:
+                data = await resp.json()
+        if not data.get("ok"):
+            raise RuntimeError(f"Telegraph error: {data.get('error')}")
+        return data["result"]
+
+    async def _upload_telegram_file(self, bot: Bot, file_id: str) -> Optional[str]:
+        """
+        Скачиваем файл из Telegram и загружаем в Telegraph.
+        Возвращаем полный URL (https://telegra.ph/…).
+        """
+        try:
+            # 1) тянем файл из Telegram
+            tg_file = await bot.get_file(file_id)
+
+            buf = BytesIO()
+            # aiogram 3.x: bot.download(file, destination=...)
+            await bot.download(tg_file, destination=buf)
+            buf.seek(0)
+
+            # 2) шлём в Telegraph
+            form = aiohttp.FormData()
+            form.add_field(
+                "file",
+                buf,
+                filename="file",
+                content_type="application/octet-stream",
+            )
+
+            async with aiohttp.ClientSession() as session:
+                async with session.post(TELEGRAPH_UPLOAD_URL, data=form) as resp:
+                    text = await resp.text()
+                    try:
+                        data = json.loads(text)
+                    except json.JSONDecodeError:
+                        logger.error(
+                            "Telegraph upload: JSON decode error, response text=%r",
+                            text,
+                        )
+                        return None
+
+            # формат ответа Telegraph: [{"src": "/file/xxxx.jpg"}] либо {"error": "..."}
+            if isinstance(data, list) and data and "src" in data[0]:
+                src = data[0]["src"]
+                if src.startswith("http"):
+                    return src
+                return "https://telegra.ph" + src
+
+            logger.error("Telegraph upload: unexpected response %r", data)
+            return None
+
+        except Exception as e:
+            logger.exception("Telegraph upload failed for file_id %s: %s", file_id, e)
+            return None
+
+    # ============ публичный метод создания страницы ============
+
+    async def create_tasks_page(
+        self,
+        title: str,
+        tasks: Sequence[Task],
+        *,
+        bot: Bot,
+        session: AsyncSession,
+    ) -> str:
+        """
+        Создаёт страницу Telegraph со списком задач для админа.
+        """
+
+        content: List[Dict[str, Any]] = []
+
+        # для итогов
+        durations_sec: List[float] = []
+        complexities: List[int] = []
+
+        # кеш username по tg_id, чтобы не долбить Telegram лишний раз
+        username_cache: Dict[int, Optional[str]] = {}
+
+        # эмодзи по категориям (дополняй по необходимости)
+        CATEGORY_EMOJI: Dict[str, str] = {
+            "Интернет": "🌐",
+            "Мобильная связь": "📶",
+            "1С": "🧾",
+            "Удаленка": "🏠",
+            "Удалёнка": "🏠",
+            "Принтер": "🖨",
+            "Компьютер": "💻",
+            "Пропуск": "🎫",
+            "Доступ в дверь": "🚪",
+            "ЭЦП": "🔏",
+            "Другое": "➕",
+            "Доступы/Права": "🔑",
+            "Wi-Fi": "📶",
+            "Вирус/Безопасность": "🦠",
+            "Монитор": "🖥",
+        }
+
+        # ===== группировка по дате создания =====
+        grouped: Dict[Optional[date], List[Task]] = defaultdict(list)
+        for t in tasks:
+            created = getattr(t, "created_at", None)
+            if isinstance(created, datetime):
+                d: Optional[date] = created.date()
+            elif isinstance(created, date):
+                d = created
+            else:
+                d = None
+            grouped[d].append(t)
+
+        def _sort_key(item: tuple[Optional[date], List[Task]]) -> tuple[int, date]:
+            d, _ = item
+            if d is None:
+                return (1, date(9999, 12, 31))
+            return (0, d)
+
+        for group_date, day_tasks in sorted(grouped.items(), key=_sort_key):
+            # заголовок дня
+            if group_date is not None:
+                day_title = group_date.strftime("📅 %d.%m.%Y")
+            else:
+                day_title = "📅 Без даты создания"
+            content.append({"tag": "h2", "children": [day_title]})
+
+            # заявки за день
+            for task in day_tasks:
+                created_at = getattr(task, "created_at", None)
+                closed_at = getattr(task, "closed_at", None) or getattr(
+                    task, "updated_at", None
+                )
+
+                created_str = (
+                    created_at.strftime("%d.%m.%Y %H:%M")
+                    if isinstance(created_at, datetime)
+                    else "—"
+                )
+                closed_str = (
+                    closed_at.strftime("%d.%m.%Y %H:%M")
+                    if isinstance(closed_at, datetime)
+                    else "—"
+                )
+
+                # длительность
+                duration_str = "—"
+                if isinstance(created_at, datetime) and isinstance(closed_at, datetime):
+                    delta = closed_at - created_at
+                    sec = max(delta.total_seconds(), 0)
+                    durations_sec.append(sec)
+                    minutes = int(sec // 60)
+                    hours = minutes // 60
+                    minutes = minutes % 60
+                    if hours:
+                        duration_str = f"{hours} ч {minutes} мин"
+                    else:
+                        duration_str = f"{minutes} мин"
+
+                # сложность
+                complexity_val = getattr(task, "final_complexity", None)
+                if complexity_val is not None:
+                    try:
+                        c_int = int(complexity_val)
+                    except Exception:
+                        c_int = None
+                    if c_int is not None:
+                        complexities.append(c_int)
+                        complexity_str = f"{c_int}/10"
+                    else:
+                        complexity_str = "—"
+                else:
+                    complexity_str = "—"
+
+                # автор: snapshot ФИО + username через @
+                author_name = getattr(task, "author_full_name", None) or "—"
+                author_tg_id = getattr(task, "author_tg_id", None)
+                author_username: Optional[str] = None
+                if isinstance(author_tg_id, int):
+                    if author_tg_id in username_cache:
+                        author_username = username_cache[author_tg_id]
+                    else:
+                        try:
+                            chat = await bot.get_chat(author_tg_id)
+                            author_username = getattr(chat, "username", None)
+                        except Exception:
+                            author_username = None
+                        username_cache[author_tg_id] = author_username
+
+                username_part = f" (@{author_username})" if author_username else ""
+
+                category = getattr(task, "category", None) or "Без категории"
+                status = getattr(task, "status", None) or "—"
+
+                # заголовок заявки
+                cat_emoji = CATEGORY_EMOJI.get(category, "")
+                if cat_emoji:
+                    header_text = f"🧾 Заявка №{task.id} — {category} {cat_emoji}"
+                else:
+                    header_text = f"🧾 Заявка №{task.id} — {category}"
+
+                content.append({"tag": "h3", "children": [header_text]})
+
+                # основные поля
+                details_items: List[str] = []
+                details_items.append(f"👤 Автор: {author_name}{username_part}")
+
+                # статус не показываем, если CLOSED
+                if status and str(status).upper() != "CLOSED":
+                    details_items.append(f"🏷 Статус: {status}")
+
+                details_items.append(f"🕒 Создано: {created_str}")
+                details_items.append(f"✅ Завершено: {closed_str}")
+                details_items.append(f"⏱ Время выполнения: {duration_str}")
+                details_items.append(f"⭐ Сложность: {complexity_str}")
+
+                content.append(
+                    {
+                        "tag": "ul",
+                        "children": [
+                            {"tag": "li", "children": [item]}
+                            for item in details_items
+                        ],
+                    }
+                )
+
+                # описание
+                if getattr(task, "description", None):
+                    content.append(
+                        {
+                            "tag": "p",
+                            "children": [f"📝 Описание:\n{task.description}"],
+                        }
+                    )
+
+                # вложения
+                ares = await session.execute(
+                    select(Attachment).where(Attachment.task_id == task.id)
+                )
+                attachments: List[Attachment] = list(ares.scalars().all())
+
+                for att in attachments:
+                    url = await self._upload_telegram_file(bot, att.file_id)
+
+                    if not url:
+                        # хотя бы показать, что вложение было, и не молча проглатывать
+                        content.append(
+                            {
+                                "tag": "p",
+                                "children": [
+                                    f"⚠️ Не удалось загрузить вложение ({att.file_type})."
+                                ],
+                            }
+                        )
+                        continue
+
+                    if att.file_type == "photo":
+                        node: Dict[str, Any] = {
+                            "tag": "figure",
+                            "children": [
+                                {
+                                    "tag": "img",
+                                    "attrs": {"src": url},
+                                }
+                            ],
+                        }
+                        if att.caption:
+                            node["children"].append(
+                                {
+                                    "tag": "figcaption",
+                                    "children": [att.caption],
+                                }
+                            )
+                        content.append(node)
+
+                    elif att.file_type == "video":
+                        link_text = att.caption or "🎬 Видео"
+                        content.append(
+                            {
+                                "tag": "p",
+                                "children": [
+                                    {
+                                        "tag": "a",
+                                            "attrs": {"href": url},
+                                            "children": [link_text],
+                                    }
+                                ],
+                            }
+                        )
+
+                    elif att.file_type == "voice":
+                        link_text = att.caption or "🎙 Голосовое сообщение"
+                        content.append(
+                            {
+                                "tag": "p",
+                                "children": [
+                                    {
+                                        "tag": "a",
+                                        "attrs": {"href": url},
+                                        "children": [link_text],
+                                    }
+                                ],
+                            }
+                        )
+
+                    elif att.file_type == "document":
+                        link_text = att.caption or "📎 Документ"
+                        content.append(
+                            {
+                                "tag": "p",
+                                "children": [
+                                    {
+                                        "tag": "a",
+                                        "attrs": {"href": url},
+                                        "children": [link_text],
+                                    }
+                                ],
+                            }
+                        )
+
+                # разделитель между заявками
+                content.append({"tag": "hr"})
+
+        # ===== Итоги периода =====
+        total_tasks = len(tasks)
+        if total_tasks:
+            content.append({"tag": "h3", "children": ["📊 Итоги периода"]})
+
+            summary_lines: List[str] = [f"📌 Всего закрытых заявок: {total_tasks}"]
+
+            if durations_sec:
+                avg_sec = sum(durations_sec) / len(durations_sec)
+                avg_minutes = int(avg_sec // 60)
+                avg_hours = avg_minutes // 60
+                avg_minutes = avg_minutes % 60
+                if avg_hours:
+                    avg_duration_str = f"{avg_hours} ч {avg_minutes} мин"
+                else:
+                    avg_duration_str = f"{avg_minutes} мин"
+                summary_lines.append(
+                    f"⏱ Среднее время выполнения: {avg_duration_str}"
+                )
+
+            if complexities:
+                avg_complexity = sum(complexities) / len(complexities)
+                summary_lines.append(
+                    f"⭐ Средняя сложность задач: {avg_complexity:.1f}/10"
+                )
+
+            content.append(
+                {
+                    "tag": "ul",
+                    "children": [
+                        {"tag": "li", "children": [line]}
+                        for line in summary_lines
+                    ],
+                }
+            )
+
+        # ===== создание страницы =====
+        params = {
+            "access_token": self.config.access_token,
+            "title": title,
+            "author_name": self.config.author_name,
+            "content": json.dumps(content, ensure_ascii=False),
+        }
+        if self.config.author_url:
+            params["author_url"] = self.config.author_url
+
+        result = await self._request("createPage", params)
+        url = result.get("url")
+        if not url:
+            path = result.get("path", "")
+            url = f"https://telegra.ph/{path}"
+        return url
