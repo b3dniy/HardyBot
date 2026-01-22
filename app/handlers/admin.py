@@ -32,7 +32,6 @@ from app.keyboards import (
     admin_menu,
     rating_kb,
     report_finish_kb,
-    admin_done_kb,
 )
 from app.models import Task, User, Attachment
 from app.states import AdminReport
@@ -1070,7 +1069,7 @@ def _assignee_kb(my_id: int) -> InlineKeyboardMarkup:
     _colleague_id, label = _pick_colleague(my_id)
     kb = InlineKeyboardBuilder()
     kb.button(text="Себе", callback_data=f"a:add:who:{my_id}")
-    kb.button(text=label, callback_data=f"a:add:who:colleague")
+    kb.button(text=label, callback_data="a:add:who:colleague")
     kb.button(text="🔙 Назад", callback_data="a:back_admin")
     kb.adjust(2, 1)
     return kb.as_markup()

@@ -16,6 +16,8 @@ from aiogram.types import (
 from aiogram.types import Message as TgMessage
 from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.types import InlineKeyboardMarkup
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -117,9 +119,6 @@ async def _clean_media(bot: Bot, boss_id: int) -> None:
 
 
 # ----------------- локальные клавиатуры (минимум текста + назад/отмена) ----------------- #
-
-from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.types import InlineKeyboardMarkup
 
 def kb_boss_menu() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
@@ -678,15 +677,20 @@ async def b_collect(message: Message, state: FSMContext):
         d.description += (("\n" if d.description else "") + message.text)
         updated = True
     elif message.photo:
-        d.attachments.append(("photo", message.photo[-1].file_id, message.caption, message.media_group_id)); updated = True
+        d.attachments.append(("photo", message.photo[-1].file_id, message.caption, message.media_group_id))
+        updated = True
     elif message.video:
-        d.attachments.append(("video", message.video.file_id, message.caption, message.media_group_id)); updated = True
+        d.attachments.append(("video", message.video.file_id, message.caption, message.media_group_id))
+        updated = True
     elif message.voice:
-        d.attachments.append(("voice", message.voice.file_id, message.caption, message.media_group_id)); updated = True
+        d.attachments.append(("voice", message.voice.file_id, message.caption, message.media_group_id))
+        updated = True
     elif message.document:
-        d.attachments.append(("document", message.document.file_id, message.caption, message.media_group_id)); updated = True
+        d.attachments.append(("document", message.document.file_id, message.caption, message.media_group_id))
+        updated = True
     if updated:
         await state.update_data(boss_draft=d)
+
 
 @router.callback_query(TicketState.boss_new_collect, F.data == "b:new:done")
 async def b_done(cb: CallbackQuery, session: AsyncSession, bot: Bot, state: FSMContext):

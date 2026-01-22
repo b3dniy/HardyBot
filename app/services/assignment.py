@@ -1,7 +1,6 @@
 # app/services/assignment.py
 from __future__ import annotations
 from html import escape
-from typing import Optional
 import logging
 from dataclasses import dataclass
 from typing import Optional, Tuple, Dict, List
