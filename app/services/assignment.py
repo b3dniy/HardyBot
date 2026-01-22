@@ -40,8 +40,8 @@ OPEN_STATUSES = {
 # ----------------------------
 # Администраторы и имена
 # ----------------------------
-ARTUR_ID = settings.ADMIN_ARTUR_ID
-ANDREY_ID = settings.ADMIN_ANDREY_K_ID
+ARTUR_ID = settings.ADMIN_1
+ANDREY_ID = settings.ADMIN_2
 
 ADMIN_NAMES: Dict[int, str] = {
     ARTUR_ID: "Артур",

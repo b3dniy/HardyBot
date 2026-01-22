@@ -48,15 +48,15 @@ class Settings:
     AUTH_BAN_MINUTES: int = _int("AUTH_BAN_MINUTES", 15)
 
     # персонал
-    ADMIN_ARTUR_ID: int = _int("ADMIN_ARTUR_ID")
-    ADMIN_ANDREY_K_ID: int = _int("ADMIN_ANDREY_K_ID")
-    BOSS_ANDREY_T_ID: int = _int("BOSS_ANDREY_T_ID")
+    ADMIN_1: int = _int("ADMIN_1")
+    ADMIN_2: int = _int("ADMIN_2")
+    BOSS: int = _int("BOSS")
 
     @property
     def admin_ids(self) -> tuple[int, ...]:
         """Два ID админов как кортеж (строго без босса)."""
         out: list[int] = []
-        for v in (self.ADMIN_ANDREY_K_ID, self.ADMIN_ARTUR_ID):
+        for v in (self.ADMIN_2, self.ADMIN_1):
             if v:
                 try:
                     out.append(int(v))
@@ -66,13 +66,13 @@ class Settings:
 
     @property
     def boss_id(self) -> int | None:
-        return int(self.BOSS_ANDREY_T_ID) if self.BOSS_ANDREY_T_ID else None
+        return int(self.BOSS) if self.BOSS else None
 
     @property
     def staff_ids(self) -> set[int]:
         """Весь персонал: оба админа + босс."""
         result: set[int] = set()
-        for v in (self.ADMIN_ARTUR_ID, self.ADMIN_ANDREY_K_ID, self.BOSS_ANDREY_T_ID):
+        for v in (self.ADMIN_1, self.ADMIN_2, self.BOSS):
             if v:
                 try:
                     result.add(int(v))

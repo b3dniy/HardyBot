@@ -65,9 +65,9 @@ CATEGORY_EMOJI: Dict[str, str] = {name: emoji for name, emoji in ADMIN_CATEGORIE
 # Список для политик назначения (без эмодзи)
 CATEGORIES: List[str] = [name for name, _ in ADMIN_CATEGORIES]
 
-ARTUR_ID: Optional[int] = settings.ADMIN_ARTUR_ID
-ANDREY_K_ID: Optional[int] = settings.ADMIN_ANDREY_K_ID
-BOSS_ANDREY_T_ID: Optional[int] = settings.BOSS_ANDREY_T_ID
+ARTUR_ID: Optional[int] = settings.ADMIN_1
+ANDREY_K_ID: Optional[int] = settings.ADMIN_2
+BOSS_ANDREY_T_ID: Optional[int] = settings.BOSS
 
 ONLY_ARTUR = {"Компьютер", "Удаленка", "1C", "1С"}
 ONLY_ANDREY = {"Пропуск", "Доступ в дверь"}

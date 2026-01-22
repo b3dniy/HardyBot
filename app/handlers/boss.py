@@ -19,9 +19,9 @@ from aiogram.exceptions import TelegramBadRequest
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
-
+from app.enums import Priority
 from app.config import settings
-from app.enums import Role, Status, Priority
+from app.enums import Role, Status
 from app.models import Task, User, Attachment
 from app.states import TicketState
 
@@ -37,7 +37,7 @@ PAGE = 9  # 3x3 плитки
 
 def is_boss(user_id: int) -> bool:
     try:
-        return int(user_id) == int(settings.BOSS_ANDREY_T_ID)
+        return int(user_id) == int(settings.BOSS)
     except Exception:
         return False
 
@@ -132,8 +132,8 @@ def kb_boss_menu() -> InlineKeyboardMarkup:
 
 def kb_pick_admin() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="👨‍💻 Артур", callback_data=f"b:new:pick_admin:{settings.ADMIN_ARTUR_ID}")
-    kb.button(text="🧑‍💻 Андрей К.", callback_data=f"b:new:pick_admin:{settings.ADMIN_ANDREY_K_ID}")
+    kb.button(text="👨‍💻 Артур", callback_data=f"b:new:pick_admin:{settings.ADMIN_1}")
+    kb.button(text="🧑‍💻 Андрей К.", callback_data=f"b:new:pick_admin:{settings.ADMIN_2}")
     kb.button(text="🔙 Назад", callback_data="b:menu")   # только назад
     kb.adjust(2, 1)
     return kb.as_markup()
@@ -159,17 +159,17 @@ def kb_collect() -> InlineKeyboardMarkup:
 def kb_vacation(artur_on: bool, andrey_on: bool) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text=f"👨‍💻 Артур — {'☀️ отпуск' if artur_on else '🟢 работает'}",
-              callback_data=f"b:toggle_vac:{settings.ADMIN_ARTUR_ID}")
+              callback_data=f"b:toggle_vac:{settings.ADMIN_1}")
     kb.button(text=f"🧑‍💻 Андрей К. — {'☀️ отпуск' if andrey_on else '🟢 работает'}",
-              callback_data=f"b:toggle_vac:{settings.ADMIN_ANDREY_K_ID}")
+              callback_data=f"b:toggle_vac:{settings.ADMIN_2}")
     kb.button(text="🔙 Назад", callback_data="b:menu")
     kb.adjust(1, 1, 1)
     return kb.as_markup()
 
 def kb_stats_root(artur_cur: int, andrey_cur: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text=f"🧑‍💻 Андрей К.  {_emojibar(andrey_cur)}", callback_data=f"b:stats:emp:{settings.ADMIN_ANDREY_K_ID}")
-    kb.button(text=f"👨‍💻 Артур  {_emojibar(artur_cur)}", callback_data=f"b:stats:emp:{settings.ADMIN_ARTUR_ID}")
+    kb.button(text=f"🧑‍💻 Андрей К.  {_emojibar(andrey_cur)}", callback_data=f"b:stats:emp:{settings.ADMIN_2}")
+    kb.button(text=f"👨‍💻 Артур  {_emojibar(artur_cur)}", callback_data=f"b:stats:emp:{settings.ADMIN_1}")
     kb.button(text="🔙 Назад", callback_data="b:menu")
     kb.adjust(1, 1, 1)
     return kb.as_markup()
@@ -241,8 +241,8 @@ async def cmd_boss(message: Message, session: AsyncSession, bot: Bot, state: FSM
     await _clean_media(bot, message.from_user.id)
 
     # статусы сотрудников пригодятся ниже для отпусков — сами статусы выводим в разделе «Отпуска»
-    _ = await _get_user(session, settings.ADMIN_ARTUR_ID)
-    _ = await _get_user(session, settings.ADMIN_ANDREY_K_ID)
+    _ = await _get_user(session, settings.ADMIN_1)
+    _ = await _get_user(session, settings.ADMIN_2)
 
     text = (
         "🧭 <b>Панель начальника</b>\n"
@@ -260,8 +260,8 @@ async def b_vac(cb: CallbackQuery, session: AsyncSession, bot: Bot):
     if not is_boss(cb.from_user.id):
         return await cb.answer("Нет прав.", show_alert=True)
 
-    artur = await _get_user(session, settings.ADMIN_ARTUR_ID)
-    andrey = await _get_user(session, settings.ADMIN_ANDREY_K_ID)
+    artur = await _get_user(session, settings.ADMIN_1)
+    andrey = await _get_user(session, settings.ADMIN_2)
     text = "☀️ <b>Отпуска</b>\nПереключайте статусы кнопками ниже."
     new_id = await _show_anchor(
         bot,
@@ -288,8 +288,8 @@ async def b_toggle_vac(cb: CallbackQuery, session: AsyncSession):
     await cb.answer("Обновлено ✅")
 
     # перерисуем клавиатуру (важно: передаём весь markup)
-    artur = await _get_user(session, settings.ADMIN_ARTUR_ID)
-    andrey = await _get_user(session, settings.ADMIN_ANDREY_K_ID)
+    artur = await _get_user(session, settings.ADMIN_1)
+    andrey = await _get_user(session, settings.ADMIN_2)
     if isinstance(cb.message, TgMessage):
         try:
             await cb.message.edit_reply_markup(
@@ -320,8 +320,8 @@ async def b_stats_root(cb: CallbackQuery, session: AsyncSession, bot: Bot):
     if not is_boss(cb.from_user.id):
         return await cb.answer("Нет прав.", show_alert=True)
 
-    andrey_cur = await _count_current(session, settings.ADMIN_ANDREY_K_ID)
-    artur_cur = await _count_current(session, settings.ADMIN_ARTUR_ID)
+    andrey_cur = await _count_current(session, settings.ADMIN_2)
+    artur_cur = await _count_current(session, settings.ADMIN_1)
 
     text = "📊 <b>Статистика</b>\nВыберите сотрудника."
     new_id = await _show_anchor(bot, cb.from_user.id, text, kb_stats_root(artur_cur, andrey_cur),
@@ -368,7 +368,7 @@ async def _fetch_tasks(session: AsyncSession, emp_id: int, mode: str, page: int)
     return tasks, page, pages, total
 
 def _name_for_emp(emp_id: int) -> str:
-    return "Андрей К." if emp_id == settings.ADMIN_ANDREY_K_ID else "Артур"
+    return "Андрей К." if emp_id == settings.ADMIN_2 else "Артур"
 
 @router.callback_query(F.data.startswith("b:stats:list:"))
 async def b_stats_list(cb: CallbackQuery, session: AsyncSession, bot: Bot):
