@@ -1,3 +1,5 @@
+# app/keyboards.py
+
 from __future__ import annotations
 
 from aiogram.utils.keyboard import InlineKeyboardBuilder
