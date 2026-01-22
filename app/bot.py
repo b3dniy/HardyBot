@@ -19,7 +19,49 @@ from app.middlewares.auth import RequireAuthMiddleware, RequireProfileMiddleware
 from app.middlewares.db_session import DBSessionMiddleware
 from app.error_handlers import register_error_handlers
 
-print("[DBG] staff_ids:", settings.staff_ids)
+def print_bot_started(staff_ids: set[int]) -> None:
+    print(
+        """
+██████╗  ██████╗ ████████╗
+██╔══██╗██╔═══██╗╚══██╔══╝
+██████╔╝██║   ██║   ██║   
+██╔══██╗██║   ██║   ██║   
+██████╔╝╚██████╔╝   ██║   
+╚═════╝  ╚═════╝    ╚═╝   
+
+███████╗████████╗ █████╗ ██████╗ ████████╗███████╗██████╗ 
+██╔════╝╚══██╔══╝██╔══██╗██╔══██╗╚══██╔══╝██╔════╝██╔══██╗
+███████╗   ██║   ███████║██████╔╝   ██║   █████╗  ██║  ██║
+╚════██║   ██║   ██╔══██║██╔══██╗   ██║   ██╔══╝  ██║  ██║
+███████║   ██║   ██║  ██║██║  ██║   ██║   ███████╗██████╔╝
+╚══════╝   ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═════╝
+"""
+    )
+    print(f"[DBG] staff_ids: {staff_ids}")
+    print("-" * 50)
+
+
+def print_bot_stopped() -> None:
+    print(
+        """
+██████╗  ██████╗ ████████╗
+██╔══██╗██╔═══██╗╚══██╔══╝
+██████╔╝██║   ██║   ██║   
+██╔══██╗██║   ██║   ██║   
+██████╔╝╚██████╔╝   ██║   
+╚═════╝  ╚═════╝    ╚═╝   
+
+███████╗████████╗ ██████╗ ██████╗ ██████╗ ███████╗██████╗ 
+██╔════╝╚══██╔══╝██╔═══██╗██╔══██╗██╔══██╗██╔════╝██╔══██╗
+███████╗   ██║   ██║   ██║██████╔╝██████╔╝█████╗  ██║  ██║
+╚════██║   ██║   ██║   ██║██╔═══╝ ██╔═══╝ ██╔══╝  ██║  ██║
+███████║   ██║   ╚██████╔╝██║     ██║     ███████╗██████╔╝
+╚══════╝   ╚═╝    ╚═════╝ ╚═╝     ╚═╝     ╚══════╝╚═════╝
+"""
+    )
+
+print_bot_started(settings.staff_ids)
+
 
 
 async def _apply_simple_migrations():
@@ -115,4 +157,7 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print_bot_stopped()
