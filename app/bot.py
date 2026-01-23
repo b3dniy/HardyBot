@@ -1,3 +1,4 @@
+# app/bot.py
 import asyncio
 import logging
 from datetime import datetime
@@ -8,19 +9,22 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand
 from sqlalchemy import text
 
-from app.middlewares.antispam import AntiSpamMiddleware
-
 from app.config import settings
 from app.db import engine, Base, SessionLocal
-from app.handlers import common as common_handlers
-from app.handlers import user as user_handlers
+from app.error_handlers import register_error_handlers
 from app.handlers import admin as admin_handlers
 from app.handlers import boss as boss_handlers
+from app.handlers import common as common_handlers
+from app.handlers import user as user_handlers
+from app.logging_setup import setup_logging
+from app.middlewares.antispam import AntiSpamMiddleware
 from app.middlewares.auth import RequireAuthMiddleware, RequireProfileMiddleware
 from app.middlewares.db_session import DBSessionMiddleware
-from app.error_handlers import register_error_handlers
-
+from app.middlewares.logging import LoggingMiddleware
 from app.utils.uptime import UptimePrinter, format_dt, format_uptime
+
+# Инициализация логирования должна происходить как можно раньше
+setup_logging(log_dir="logs", log_file="bot.log", level="INFO", max_mb=50, backup_count=10)
 
 
 def print_bot_started(staff_ids: set[int]) -> None:
@@ -28,12 +32,12 @@ def print_bot_started(staff_ids: set[int]) -> None:
         """
 ██████╗  ██████╗ ████████╗
 ██╔══██╗██╔═══██╗╚══██╔══╝
-██████╔╝██║   ██║   ██║   
-██╔══██╗██║   ██║   ██║   
-██████╔╝╚██████╔╝   ██║   
-╚═════╝  ╚═════╝    ╚═╝   
+██████╔╝██║   ██║   ██║
+██╔══██╗██║   ██║   ██║
+██████╔╝╚██████╔╝   ██║
+╚═════╝  ╚═════╝    ╚═╝
 
-███████╗████████╗ █████╗ ██████╗ ████████╗███████╗██████╗ 
+███████╗████████╗ █████╗ ██████╗ ████████╗███████╗██████╗
 ██╔════╝╚══██╔══╝██╔══██╗██╔══██╗╚══██╔══╝██╔════╝██╔══██╗
 ███████╗   ██║   ███████║██████╔╝   ██║   █████╗  ██║  ██║
 ╚════██║   ██║   ██╔══██║██╔══██╗   ██║   ██╔══╝  ██║  ██║
@@ -50,12 +54,12 @@ def print_bot_stopped() -> None:
         """
 ██████╗  ██████╗ ████████╗
 ██╔══██╗██╔═══██╗╚══██╔══╝
-██████╔╝██║   ██║   ██║   
-██╔══██╗██║   ██║   ██║   
-██████╔╝╚██████╔╝   ██║   
-╚═════╝  ╚═════╝    ╚═╝   
+██████╔╝██║   ██║   ██║
+██╔══██╗██║   ██║   ██║
+██████╔╝╚██████╔╝   ██║
+╚═════╝  ╚═════╝    ╚═╝
 
-███████╗████████╗ ██████╗ ██████╗ ██████╗ ███████╗██████╗ 
+███████╗████████╗ ██████╗ ██████╗ ██████╗ ███████╗██████╗
 ██╔════╝╚══██╔══╝██╔═══██╗██╔══██╗██╔══██╗██╔════╝██╔══██╗
 ███████╗   ██║   ██║   ██║██████╔╝██████╔╝█████╗  ██║  ██║
 ╚════██║   ██║   ██║   ██║██╔═══╝ ██╔═══╝ ██╔══╝  ██║  ██║
@@ -112,6 +116,10 @@ async def on_startup(bot: Bot):
 
 
 def setup_middlewares(dp: Dispatcher):
+    # Логирование должно стоять максимально рано, чтобы видеть всё, что прилетает
+    dp.message.middleware(LoggingMiddleware())
+    dp.callback_query.middleware(LoggingMiddleware())
+
     dp.message.middleware(AntiSpamMiddleware())
     dp.callback_query.middleware(AntiSpamMiddleware())
 
