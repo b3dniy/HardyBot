@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import datetime
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -18,6 +19,9 @@ from app.handlers import boss as boss_handlers
 from app.middlewares.auth import RequireAuthMiddleware, RequireProfileMiddleware
 from app.middlewares.db_session import DBSessionMiddleware
 from app.error_handlers import register_error_handlers
+
+from app.utils.uptime import UptimePrinter, format_dt, format_uptime
+
 
 def print_bot_started(staff_ids: set[int]) -> None:
     print(
@@ -60,9 +64,6 @@ def print_bot_stopped() -> None:
 """
     )
 
-print_bot_started(settings.staff_ids)
-
-
 
 async def _apply_simple_migrations():
     """
@@ -72,38 +73,35 @@ async def _apply_simple_migrations():
     async with engine.begin() as conn:
         # users: sip_ext, profile_completed
         try:
-            await conn.execute(text('ALTER TABLE users ADD COLUMN sip_ext VARCHAR(3)'))
+            await conn.execute(text("ALTER TABLE users ADD COLUMN sip_ext VARCHAR(3)"))
         except Exception:
             pass
         try:
-            await conn.execute(text('ALTER TABLE users ADD COLUMN profile_completed BOOLEAN DEFAULT 0'))
+            await conn.execute(text("ALTER TABLE users ADD COLUMN profile_completed BOOLEAN DEFAULT 0"))
         except Exception:
             pass
         try:
-            await conn.execute(text('CREATE INDEX IF NOT EXISTS ix_users_sip_ext ON users (sip_ext)'))
+            await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_users_sip_ext ON users (sip_ext)"))
         except Exception:
             pass
 
         # tasks: author_full_name, author_sip
         try:
-            await conn.execute(text('ALTER TABLE tasks ADD COLUMN author_full_name VARCHAR(255)'))
+            await conn.execute(text("ALTER TABLE tasks ADD COLUMN author_full_name VARCHAR(255)"))
         except Exception:
             pass
         try:
-            await conn.execute(text('ALTER TABLE tasks ADD COLUMN author_sip VARCHAR(3)'))
+            await conn.execute(text("ALTER TABLE tasks ADD COLUMN author_sip VARCHAR(3)"))
         except Exception:
             pass
 
 
 async def on_startup(bot: Bot):
-    # создаём таблицы (для прототипа; в проде — alembic миграции)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    # применим "ленивые" миграции
     await _apply_simple_migrations()
 
-    # команды бота
     await bot.set_my_commands(
         [
             BotCommand(command="start", description="Начать"),
@@ -114,20 +112,17 @@ async def on_startup(bot: Bot):
 
 
 def setup_middlewares(dp: Dispatcher):
-    dp.message.middleware(AntiSpamMiddleware())       # для сообщений и команд
-    dp.callback_query.middleware(AntiSpamMiddleware())  # для кнопок
+    dp.message.middleware(AntiSpamMiddleware())
+    dp.callback_query.middleware(AntiSpamMiddleware())
 
-    # сначала прокидываем сессию БД в хендлеры
     dbmw = DBSessionMiddleware(SessionLocal)
     dp.message.middleware(dbmw)
     dp.callback_query.middleware(dbmw)
 
-    # затем проверка аутентификации
     authmw = RequireAuthMiddleware(SessionLocal)
     dp.message.middleware(authmw)
     dp.callback_query.middleware(authmw)
 
-    # НОВОЕ: требуем заполненный профиль (ФИО + SIP) для всех действий, кроме регистрации/базовых
     profmw = RequireProfileMiddleware()
     dp.message.middleware(profmw)
     dp.callback_query.middleware(profmw)
@@ -140,7 +135,13 @@ def setup_routers(dp: Dispatcher):
     dp.include_router(boss_handlers.router)
 
 
-async def main():
+async def main() -> None:
+    print_bot_started(settings.staff_ids)
+
+    started_at = datetime.now().astimezone()
+    uptime = UptimePrinter(started_at=started_at)
+    uptime.start()
+
     dp = Dispatcher(storage=MemoryStorage())
     setup_middlewares(dp)
     setup_routers(dp)
@@ -150,14 +151,30 @@ async def main():
 
     try:
         await on_startup(bot)
-        # ограничим типы апдейтов теми, что реально используются
-        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+
+        # При Ctrl+C polling часто завершается через CancelledError — это штатно.
+        try:
+            await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+        except asyncio.CancelledError:
+            pass
+
     finally:
+        await uptime.stop()
         await bot.session.close()
+
+        print_bot_stopped()
+
+        finished_at = datetime.now().astimezone()
+        worked_sec = int((finished_at - started_at).total_seconds())
+
+        print(f"Started at : {format_dt(started_at)}")
+        print(f"Stopped at : {format_dt(finished_at)}")
+        print(f"Worked     : {format_uptime(worked_sec)}")
 
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print_bot_stopped()
+        # подавляем traceback при Ctrl+C (логика остановки уже в finally внутри main)
+        pass
