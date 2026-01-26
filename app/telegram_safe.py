@@ -93,7 +93,9 @@ async def call_with_retry(
                 "message can't be deleted",
             )
             if any(x in text for x in noisy):
-                logger.warning("BadRequest(noisy): %s — not retrying ctx=%s", e, context)
+                # Для delete/edit это штатная ситуация (дубликаты, удалено руками, гонки).
+                # Не засоряем WARN/ERROR.
+                logger.debug("BadRequest(noisy): %s — not retrying ctx=%s", e, context)
                 return None
             logger.warning("BadRequest: %s — attempt %s/%s ctx=%s", e, attempt, max_attempts, context)
 
@@ -202,8 +204,8 @@ async def safe_bulk_delete(
     if not message_ids:
         return
 
-    ids: List[int] = list(message_ids)
-    ids.sort(reverse=True)
+    # Убираем None/0 и дубликаты (часто одно и то же сообщение регистрируется несколько раз при edit).
+    ids: List[int] = sorted({int(mid) for mid in message_ids if mid}, reverse=True)
 
     processed = 0
     for mid in ids:

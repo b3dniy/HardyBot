@@ -536,7 +536,7 @@ def _history_kb(tasks: Sequence[Task], page: int, pages: int) -> InlineKeyboardM
     kb.button(text="◀️", callback_data=f"u:history:p:{left_page}")
     kb.button(text="▶️", callback_data=f"u:history:p:{right_page}")
     kb.button(text=f"Page {page}/{pages}", callback_data="u:noop")
-    kb.button(text="⬅️ Назад", callback_data="u:menu")
+    kb.button(text="🔙 Назад", callback_data="u:menu")
 
     kb.adjust(2, 2, 2, 2, 1, 1)
     return kb.as_markup()
@@ -651,7 +651,7 @@ async def cb_user_view(cb: CallbackQuery, session: AsyncSession, bot: Bot):
 
     # клавиатура «назад/меню»
     kb = InlineKeyboardBuilder()
-    kb.button(text="⬅️ Назад", callback_data=f"u:history:p:{page}")
+    kb.button(text="🔙 Назад", callback_data=f"u:history:p:{page}")
     kb.button(text="🏠 Меню", callback_data="u:menu")
     kb.adjust(2)
 
