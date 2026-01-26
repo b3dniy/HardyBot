@@ -1222,7 +1222,7 @@ def _tgraph_root_kb() -> InlineKeyboardMarkup:
     kb.button(text="День", callback_data="a:tgraph:day")
     kb.button(text="Неделя", callback_data="a:tgraph:week")
     kb.button(text="Месяц", callback_data="a:tgraph:month")
-    kb.button(text="⬅️ Назад", callback_data="a:back_admin")
+    kb.button(text="🔙 Назад", callback_data="a:back_admin")
     kb.adjust(2, 2, 1)
     return kb.as_markup()
 
