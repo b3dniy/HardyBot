@@ -462,8 +462,14 @@ async def _show_my_tasks(bot: Bot, session: AsyncSession, admin_id: int) -> None
 
 @router.callback_query(F.data == "a:back_admin")
 async def cb_back_admin(cb: CallbackQuery, bot: Bot) -> None:
+    try:
+        await cb.answer()
+    except TelegramBadRequest:
+        pass
+    except Exception:
+        pass
+
     await _show_admin_panel(bot, cb.from_user.id)
-    await cb.answer()
 
 
 @router.callback_query(F.data == "a:list")

@@ -66,6 +66,9 @@ def _is_noise_bad_request(exc: TelegramBadRequest) -> bool:
         "message is too old",
         "replied message not found",
         "message can't be deleted",
+        "query is too old",
+        "response timeout expired",
+        "query id is invalid",
     )
     return any(x in t for x in noisy)
 
@@ -84,17 +87,19 @@ def register_error_handlers(dp: Dispatcher) -> None:
 
     # 429 Flood/RetryAfter — подождать и замолчать
     @dp.errors(ExceptionTypeFilter(TelegramRetryAfter))
-    async def _retry_after_handler(event, exc: TelegramRetryAfter):
+    async def _retry_after_handler(event):
+        exc: TelegramRetryAfter = event.exception
         user_id, chat_id, kind = _extract_ctx(event.update)
         retry = float(getattr(exc, "retry_after", 1.0) or 1.0)
         logger.warning("429 RetryAfter %.2fs on %s (user=%s chat=%s): %s", retry, kind, user_id, chat_id, exc)
-        await _safe_answer_cb(event.update)  # закрыть «часики»
+        await _safe_answer_cb(event.update)
         await _sleep_with_jitter(retry)
-        return True  # гасим
+        return True
 
     # 403 Forbidden — пользователь удалил чат/заблокировал бота
     @dp.errors(ExceptionTypeFilter(TelegramForbiddenError))
-    async def _forbidden_handler(event, exc: TelegramForbiddenError):
+    async def _forbidden_handler(event):
+        exc: TelegramForbiddenError = event.exception
         user_id, chat_id, kind = _extract_ctx(event.update)
         logger.info("403 Forbidden on %s (user=%s chat=%s): %s", kind, user_id, chat_id, exc)
         await _safe_answer_cb(event.update)
@@ -102,7 +107,8 @@ def register_error_handlers(dp: Dispatcher) -> None:
 
     # 400 BadRequest — часто «шум»
     @dp.errors(ExceptionTypeFilter(TelegramBadRequest))
-    async def _bad_request_handler(event, exc: TelegramBadRequest):
+    async def _bad_request_handler(event):
+        exc: TelegramBadRequest = event.exception
         user_id, chat_id, kind = _extract_ctx(event.update)
         level = logging.WARNING if _is_noise_bad_request(exc) else logging.ERROR
         logger.log(level, "400 BadRequest on %s (user=%s chat=%s): %s", kind, user_id, chat_id, exc)
@@ -111,7 +117,8 @@ def register_error_handlers(dp: Dispatcher) -> None:
 
     # Сетевые ошибки — небольшой бэк-офф
     @dp.errors(ExceptionTypeFilter(TelegramNetworkError))
-    async def _network_handler(event, exc: TelegramNetworkError):
+    async def _network_handler(event):
+        exc: TelegramNetworkError = event.exception
         user_id, chat_id, kind = _extract_ctx(event.update)
         logger.warning("Network error on %s (user=%s chat=%s): %s", kind, user_id, chat_id, exc)
         await _safe_answer_cb(event.update)
@@ -120,27 +127,28 @@ def register_error_handlers(dp: Dispatcher) -> None:
 
     # Прочие API-ошибки Telegram
     @dp.errors(ExceptionTypeFilter(TelegramAPIError))
-    async def _api_error_handler(event, exc: TelegramAPIError):
+    async def _api_error_handler(event):
+        exc: TelegramAPIError = event.exception
         user_id, chat_id, kind = _extract_ctx(event.update)
         logger.error("TelegramAPIError on %s (user=%s chat=%s): %s", kind, user_id, chat_id, exc)
         await _safe_answer_cb(event.update)
         return True
 
-    # Отмена корутин (обычно при остановке бота) — обрабатываем без фильтра,
-    # т.к. CancelledError наследуется от BaseException, а не от Exception.
+    # Отмена корутин (обычно при остановке бота)
     @dp.errors()
-    async def _cancelled_handler(event, exc):  # тип оставляем общий
+    async def _cancelled_handler(event):
+        exc = event.exception
         if isinstance(exc, asyncio.CancelledError):
             user_id, chat_id, kind = _extract_ctx(event.update)
             logger.debug("CancelledError on %s (user=%s chat=%s)", kind, user_id, chat_id)
             await _safe_answer_cb(event.update)
-            return True  # погасили — дальше не идём
+            return True
 
     # Фоллбэк: любой другой эксепшен
     @dp.errors()
-    async def _fallback_handler(event, exc: Exception):
+    async def _fallback_handler(event):
+        exc: Exception = event.exception
         user_id, chat_id, kind = _extract_ctx(event.update)
         logger.exception("Unhandled error on %s (user=%s chat=%s): %r", kind, user_id, chat_id, exc)
-        # Если это кнопка — сообщим коротко, чтобы юзер понимал, что делать
         await _safe_answer_cb(event.update, "Произошла ошибка. Попробуйте ещё раз.", show_alert=False)
         return True
