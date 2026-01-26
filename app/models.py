@@ -56,6 +56,8 @@ class Task(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
+
     expected_complexity: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     final_complexity: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 

@@ -127,6 +127,21 @@ async def _apply_simple_migrations():
         except Exception:
             pass
 
+        # tasks: closed_at (фиксируем время закрытия, чтобы updated_at не ломал отчёты)
+        try:
+            await conn.execute(text("ALTER TABLE tasks ADD COLUMN closed_at DATETIME"))
+        except Exception:
+            pass
+        try:
+            await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_tasks_closed_at ON tasks (closed_at)"))
+        except Exception:
+            pass
+        # backfill для старых закрытых задач
+        try:
+            await conn.execute(text("UPDATE tasks SET closed_at = updated_at WHERE status = 'CLOSED' AND (closed_at IS NULL OR closed_at = '')"))
+        except Exception:
+            pass
+
 
 async def on_startup(bot: Bot):
     async with engine.begin() as conn:

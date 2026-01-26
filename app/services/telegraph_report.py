@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional, Sequence, List, Dict, Any
 from collections import defaultdict
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 import json
 from io import BytesIO
 import logging
@@ -165,12 +165,19 @@ class TelegraphClient:
             "Монитор": "🖥",
         }
 
+        def _to_local(dt: datetime) -> datetime:
+            """Convert naive-UTC datetime from DB into local timezone-aware datetime."""
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone()
+
+
         # ===== группировка по дате создания =====
         grouped: Dict[Optional[date], List[Task]] = defaultdict(list)
         for t in tasks:
             created = getattr(t, "created_at", None)
             if isinstance(created, datetime):
-                d: Optional[date] = created.date()
+                d: Optional[date] = _to_local(created).date()
             elif isinstance(created, date):
                 d = created
             else:
@@ -196,13 +203,16 @@ class TelegraphClient:
                 created_at = getattr(task, "created_at", None)
                 closed_at = getattr(task, "closed_at", None) or getattr(task, "updated_at", None)
 
-                created_str = created_at.strftime("%d.%m.%Y %H:%M") if isinstance(created_at, datetime) else "—"
-                closed_str = closed_at.strftime("%d.%m.%Y %H:%M") if isinstance(closed_at, datetime) else "—"
+                created_local: Optional[datetime] = _to_local(created_at) if isinstance(created_at, datetime) else None
+                closed_local: Optional[datetime] = _to_local(closed_at) if isinstance(closed_at, datetime) else None
+
+                created_str = created_local.strftime("%d.%m.%Y %H:%M") if created_local else "—"
+                closed_str = closed_local.strftime("%d.%m.%Y %H:%M") if closed_local else "—"
 
                 # длительность
                 duration_str = "—"
-                if isinstance(created_at, datetime) and isinstance(closed_at, datetime):
-                    delta = closed_at - created_at
+                if created_local and closed_local:
+                    delta = closed_local - created_local
                     sec = max(delta.total_seconds(), 0)
                     durations_sec.append(sec)
                     minutes = int(sec // 60)

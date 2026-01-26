@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from typing import Optional, Dict, List, Tuple, Sequence
 import asyncio
-from datetime import datetime, timedelta
+import time as _time
+from datetime import datetime, timedelta, timezone, date
 from html import escape
 
 from aiogram import Router, F, Bot
@@ -41,6 +42,30 @@ from app.services.telegraph_report import TelegraphClient, TelegraphConfig
 from app.services.assignment import InMemoryNotifications, cleanup_admin_cards
 
 router = Router(name="admin")
+
+# ===== Time helpers =====
+# В БД даты/время хранятся как naive UTC (datetime.utcnow()).
+# Для отображения в отчётах/календаре переводим в локальную TZ машины, где запущен бот.
+
+def _utc_naive_to_local(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone()
+
+def _local_date_range_to_utc(start_d: date, end_d: date) -> tuple[datetime, datetime]:
+    # Local calendar [start_d, end_d) -> UTC naive datetimes for DB фильтра.
+    start_local = datetime(start_d.year, start_d.month, start_d.day)
+    end_local = datetime(end_d.year, end_d.month, end_d.day)
+
+    # time.mktime() интерпретирует naive datetime как local time и корректно учитывает DST.
+    start_ts = _time.mktime(start_local.timetuple())
+    end_ts = _time.mktime(end_local.timetuple())
+
+    return datetime.utcfromtimestamp(start_ts), datetime.utcfromtimestamp(end_ts)
+
+def _local_date_to_utc_range(d: date) -> tuple[datetime, datetime]:
+    return _local_date_range_to_utc(d, d + timedelta(days=1))
+
 
 # ===== Константы =====
 PAGE_SIZE = 9  # статистика 3x3
@@ -542,6 +567,8 @@ async def cb_done(cb: CallbackQuery, session: AsyncSession, bot: Bot, state: FSM
 
     task.assignee_tg_id = cb.from_user.id
     task.status = Status.CLOSED.value
+    if getattr(task, 'closed_at', None) is None:
+        task.closed_at = datetime.utcnow()
     await session.commit()
 
     # подчистим любые карточки/медиа по этому task_id у всех админов
@@ -1160,12 +1187,16 @@ async def _build_admin_tgraph_for_period(
     if not tasks:
         return "⚠️ За выбранный период закрытых задач нет."
 
-    if (end - start).days == 1:
-        title_suffix = start.strftime("%d.%m.%Y")
+    start_local = _utc_naive_to_local(start)
+    end_local = _utc_naive_to_local(end)
+
+    days_span = (end_local.date() - start_local.date()).days
+    if days_span == 1:
+        title_suffix = start_local.strftime("%d.%m.%Y")
         human = f"за {title_suffix}"
     else:
-        start_s = start.strftime("%d.%m.%Y")
-        end_s = (end - timedelta(days=1)).strftime("%d.%m.%Y")
+        start_s = start_local.strftime("%d.%m.%Y")
+        end_s = (end_local.date() - timedelta(days=1)).strftime("%d.%m.%Y")
         human = f"за период {start_s}–{end_s}"
         title_suffix = f"{start_s}–{end_s}"
 
@@ -1204,7 +1235,7 @@ def _tgraph_day_kb(year: int, month: int) -> InlineKeyboardMarkup:
     next_y, next_m = _shift_month(year, month, 1)
 
     # центральная кнопка — просто актуальная дата, без действия
-    today = datetime.utcnow()
+    today = datetime.now()
     center_label = today.strftime("%d.%m")
 
     kb.row(
@@ -1268,7 +1299,7 @@ def _tgraph_week_kb(year: int, month: int) -> InlineKeyboardMarkup:
     next_y, next_m = _shift_month(year, month, 1)
 
     # центральная кнопка — актуальная неделя (пн–вс) без действия
-    today = datetime.utcnow()
+    today = datetime.now()
     base_dt = datetime(year=today.year, month=today.month, day=today.day)
     monday = base_dt - timedelta(days=base_dt.weekday())
     sunday = monday + timedelta(days=6)
@@ -1319,7 +1350,7 @@ def _tgraph_month_kb(year: int) -> InlineKeyboardMarkup:
     prev_y = year - 1
     next_y = year + 1
 
-    today = datetime.utcnow()
+    today = datetime.now()
     current_month_label = f"{MONTH_NAMES_RU.get(today.month, str(today.month))} {today.year}"
 
     kb.row(
@@ -1385,9 +1416,8 @@ async def admin_tgraph_today(cb: CallbackQuery, session: AsyncSession, bot: Bot)
 
     _tgraph_clear_alert(cb.from_user.id)
 
-    now = datetime.utcnow()
-    start = datetime(year=now.year, month=now.month, day=now.day)
-    end = start + timedelta(days=1)
+    today_local = datetime.now().date()
+    start, end = _local_date_to_utc_range(today_local)
 
     alert = await _build_admin_tgraph_for_period(
         viewer_id=cb.from_user.id,
@@ -1414,7 +1444,7 @@ async def admin_tgraph_day_root(cb: CallbackQuery, bot: Bot) -> None:
 
     _tgraph_clear_alert(cb.from_user.id)
 
-    today = datetime.utcnow()
+    today = datetime.now()
     year, month = today.year, today.month
     text = _tgraph_day_text(year, month, cb.from_user.id, alert=None)
     kb = _tgraph_day_kb(year, month)
@@ -1463,8 +1493,7 @@ async def admin_tgraph_day_pick(cb: CallbackQuery, session: AsyncSession, bot: B
         await cb.answer("Некорректная дата.", show_alert=True)
         return
 
-    start = datetime(year=dt.year, month=dt.month, day=dt.day)
-    end = start + timedelta(days=1)
+    start, end = _local_date_to_utc_range(dt.date())
 
     alert = await _build_admin_tgraph_for_period(
         viewer_id=cb.from_user.id,
@@ -1493,7 +1522,7 @@ async def admin_tgraph_week_root(cb: CallbackQuery, bot: Bot) -> None:
 
     _tgraph_clear_alert(cb.from_user.id)
 
-    today = datetime.utcnow()
+    today = datetime.now()
     year, month = today.year, today.month
     text = _tgraph_week_text(year, month, cb.from_user.id, alert=None)
     kb = _tgraph_week_kb(year, month)
@@ -1542,8 +1571,7 @@ async def admin_tgraph_week_pick(cb: CallbackQuery, session: AsyncSession, bot: 
         await cb.answer("Некорректная дата.", show_alert=True)
         return
 
-    start = monday
-    end = monday + timedelta(days=7)
+    start, end = _local_date_range_to_utc(monday.date(), (monday + timedelta(days=7)).date())
 
     alert = await _build_admin_tgraph_for_period(
         viewer_id=cb.from_user.id,
@@ -1572,7 +1600,7 @@ async def admin_tgraph_month_root(cb: CallbackQuery, bot: Bot) -> None:
 
     _tgraph_clear_alert(cb.from_user.id)
 
-    year = datetime.utcnow().year
+    year = datetime.now().year
     text = _tgraph_month_text(year, cb.from_user.id, alert=None)
     kb = _tgraph_month_kb(year)
     anchor = ADMIN_ANCHOR.get(cb.from_user.id)
@@ -1619,11 +1647,13 @@ async def admin_tgraph_month_pick(cb: CallbackQuery, session: AsyncSession, bot:
         await cb.answer("Некорректный месяц.", show_alert=True)
         return
 
-    start = datetime(year=year, month=month, day=1)
+    start_d = date(year, month, 1)
     if month == 12:
-        end = datetime(year=year + 1, month=1, day=1)
+        end_d = date(year + 1, 1, 1)
     else:
-        end = datetime(year=year, month=month + 1, day=1)
+        end_d = date(year, month + 1, 1)
+
+    start, end = _local_date_range_to_utc(start_d, end_d)
 
     alert = await _build_admin_tgraph_for_period(
         viewer_id=cb.from_user.id,
