@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Optional, Dict, List, Tuple, Sequence
 import asyncio
 from datetime import datetime, timedelta
+from html import escape
 
 from aiogram import Router, F, Bot
 from aiogram.filters import Command
@@ -24,7 +25,6 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, or_, update
-from html import escape
 
 from app.config import settings
 from app.enums import Status
@@ -112,6 +112,9 @@ ADMIN_TRASH: Dict[int, List[int]] = {}
 # ЕДИНЫЙ якорь для экрана администратора (и панель, и списки рисуем в одном сообщении)
 ADMIN_ANCHOR: Dict[int, int] = {}
 
+# Telegraph alert в шапке (у тебя уже есть _with_alert — используем его)
+ADMIN_TGRAPH_ALERT: Dict[int, str] = {}  # admin_id -> alert_text
+
 
 # ===== Вспомогательные =====
 def is_admin(user_id: int) -> bool:
@@ -181,6 +184,27 @@ def _shift_month(year: int, month: int, delta: int) -> Tuple[int, int]:
 
 def _month_title(year: int, month: int) -> str:
     return f"{MONTH_NAMES_RU.get(month, str(month))} {year}"
+
+
+def _with_alert(base_text: str, alert: Optional[str]) -> str:
+    if not alert:
+        return base_text
+    return f"{base_text}\n\n{alert}"
+
+
+def _tgraph_set_alert(admin_id: int, text: Optional[str]) -> None:
+    if not text:
+        ADMIN_TGRAPH_ALERT.pop(admin_id, None)
+    else:
+        ADMIN_TGRAPH_ALERT[admin_id] = text
+
+
+def _tgraph_get_alert(admin_id: int) -> Optional[str]:
+    return ADMIN_TGRAPH_ALERT.get(admin_id)
+
+
+def _tgraph_clear_alert(admin_id: int) -> None:
+    ADMIN_TGRAPH_ALERT.pop(admin_id, None)
 
 
 # ---------- очистки ----------
@@ -345,8 +369,6 @@ async def _count_open_tasks(session: AsyncSession, assignee_tg_id: int) -> int:
 
 
 # ===================== БАЗОВОЕ МЕНЮ АДМИНА =====================
-
-
 @router.message(Command("admin"))
 async def cmd_admin(message: Message, bot: Bot) -> None:
     user = message.from_user
@@ -357,8 +379,6 @@ async def cmd_admin(message: Message, bot: Bot) -> None:
 
 
 # ===================== МОИ ЗАДАЧИ =====================
-
-
 def _my_tasks_kb(tasks: Sequence[Task], me: int) -> InlineKeyboardMarkup:
     """
     ДВЕ колонки на строку:
@@ -432,8 +452,6 @@ async def cb_list(cb: CallbackQuery, session: AsyncSession, bot: Bot) -> None:
 
 
 # ===================== ПРИНЯТЬ / ЗАКРЫТЬ / ОТЧЁТ / ОЦЕНКА =====================
-
-
 @router.callback_query(F.data.startswith("a:accept:"))
 async def cb_accept(cb: CallbackQuery, session: AsyncSession, bot: Bot) -> None:
     """
@@ -643,8 +661,6 @@ async def cb_rate(cb: CallbackQuery, session: AsyncSession, bot: Bot) -> None:
 
 
 # ===================== ПРОСМОТР ЗАДАЧИ (из списка «Мои задачи») =====================
-
-
 @router.callback_query(F.data.startswith("a:view:"))
 async def view_task(cb: CallbackQuery, session: AsyncSession, bot: Bot) -> None:
     if not is_admin(cb.from_user.id):
@@ -776,8 +792,6 @@ async def view_task(cb: CallbackQuery, session: AsyncSession, bot: Bot) -> None:
 
 
 # ===================== СТАТИСТИКА (пагинация + просмотр заявки) =====================
-
-
 def _stats_kb(items: List[Tuple[int, str]], page: int, pages: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for task_id, label in items:
@@ -909,137 +923,11 @@ async def stats_back(cb: CallbackQuery, bot: Bot) -> None:
 
 @router.callback_query(F.data.startswith("a:stats:open:"))
 async def stats_open(cb: CallbackQuery, session: AsyncSession, bot: Bot) -> None:
-    if not is_admin(cb.from_user.id):
-        await cb.answer("Нет прав.", show_alert=True)
-        return
-
-    try:
-        task_id = int((cb.data or "").split(":")[-1])
-    except Exception:
-        await cb.answer("Некорректный callback.", show_alert=True)
-        return
-
-    res = await session.execute(select(Task).where(Task.id == task_id))
-    task = res.scalars().first()
-    if not task:
-        await cb.answer("Заявка не найдена.", show_alert=True)
-        return
-
-    await _clear_viewer(bot, cb.from_user.id)
-    sent_ids: List[int] = []
-
-    author_name = "-"
-    if task.author_tg_id:
-        ures = await session.execute(select(User).where(User.tg_id == task.author_tg_id))
-        u = ures.scalars().first()
-        if u:
-            author_name = u.full_name
-
-    rating = task.final_complexity if task.final_complexity is not None else "—"
-    caption = (
-        "🧾 <b>Заявка №{id}</b>\n"
-        "👤 Автор: {author} {sip} ({author_id})\n"
-        "📂 Категория: {cat}\n"
-        "🔖 Статус: {status}\n"
-        "⭐️ Оценка (1–10): {rating}\n\n"
-        "📝 <b>Описание:</b>\n{desc}".format(
-            id=task.id,
-            author=escape(task.author_full_name or author_name or "—"),
-            sip=("· доб. " + escape(task.author_sip)) if task.author_sip else "",
-            author_id=task.author_tg_id or "—",
-            cat=escape(task.category or "—"),
-            status=escape(task.status or "—"),
-            rating=rating,
-            desc=escape(task.description or "—"),
-        )
-    )
-
-    ares = await session.execute(select(Attachment).where(Attachment.task_id == task.id))
-    attachments = ares.scalars().all()
-    media_items = [
-        (a.file_type, a.file_id, a.caption)
-        for a in attachments
-        if a.file_type in ("photo", "video", "document")
-    ]
-    voices = [a for a in attachments if a.file_type == "voice"]
-
-    try:
-        if len(media_items) == 1:
-            t, fid, _ = media_items[0]
-            if t == "photo":
-                m = await bot.send_photo(cb.from_user.id, fid, caption=caption, parse_mode="HTML")
-            elif t == "video":
-                m = await bot.send_video(cb.from_user.id, fid, caption=caption, parse_mode="HTML")
-            elif t == "document":
-                m = await bot.send_document(cb.from_user.id, fid, caption=caption, parse_mode="HTML")
-            else:
-                if isinstance(cb.message, TgMessage):
-                    m = await cb.message.answer(caption, parse_mode="HTML")
-                else:
-                    m = await bot.send_message(cb.from_user.id, caption, parse_mode="HTML")
-            sent_ids.append(m.message_id)
-
-        elif len(media_items) >= 2:
-            medias = []
-            for t, fid, _ in media_items[:10]:
-                if t == "photo":
-                    medias.append(InputMediaPhoto(media=fid))
-                elif t == "video":
-                    medias.append(InputMediaVideo(media=fid))
-                elif t == "document":
-                    medias.append(InputMediaDocument(media=fid))
-            msgs = await bot.send_media_group(chat_id=cb.from_user.id, media=medias)
-            sent_ids.extend(m.message_id for m in msgs)
-
-            rest = media_items[10:]
-            while rest:
-                batch, rest = rest[:10], rest[10:]
-                more = []
-                for t, fid, _ in batch:
-                    if t == "photo":
-                        more.append(InputMediaPhoto(media=fid))
-                    elif t == "video":
-                        more.append(InputMediaVideo(media=fid))
-                    elif t == "document":
-                        more.append(InputMediaDocument(media=fid))
-                more_msgs = await bot.send_media_group(chat_id=cb.from_user.id, media=more)
-                sent_ids.extend(m.message_id for m in more_msgs)
-
-            if isinstance(cb.message, TgMessage):
-                txt = await cb.message.answer(caption, parse_mode="HTML")
-            else:
-                txt = await bot.send_message(cb.from_user.id, caption, parse_mode="HTML")
-            sent_ids.append(txt.message_id)
-
-        else:
-            if isinstance(cb.message, TgMessage):
-                txt = await cb.message.answer(caption, parse_mode="HTML")
-            else:
-                txt = await bot.send_message(cb.from_user.id, caption, parse_mode="HTML")
-            sent_ids.append(txt.message_id)
-    except Exception:
-        if isinstance(cb.message, TgMessage):
-            txt = await cb.message.answer(caption, parse_mode="HTML")
-        else:
-            txt = await bot.send_message(cb.from_user.id, caption, parse_mode="HTML")
-        sent_ids.append(txt.message_id)
-
-    for a in voices:
-        try:
-            vm = await bot.send_voice(cb.from_user.id, a.file_id, caption=a.caption)
-            sent_ids.append(vm.message_id)
-        except Exception:
-            pass
-
-    if sent_ids:
-        VIEWER[cb.from_user.id] = sent_ids
-
-    await cb.answer("Открыто")
+    # Используем тот же просмотр, что и из "Мои задачи"
+    await view_task(cb, session, bot)
 
 
 # ===================== СОЗДАТЬ ЗАДАЧУ (админ) =====================
-
-
 class AdminCreate(StatesGroup):
     pick_category = State()
     collecting = State()
@@ -1240,24 +1128,23 @@ async def add_pick_assignee(cb: CallbackQuery, session: AsyncSession, state: FSM
 
 
 # ==================== Telegraph: отчёты с календарём и картинками ====================
-
-
 async def _build_admin_tgraph_for_period(
-    chat_id: int,
     viewer_id: int,
     session: AsyncSession,
     bot: Bot,
     start: datetime,
     end: datetime,
-) -> None:
+) -> Optional[str]:
     """
     Собирает задачи администратора viewer_id за период [start, end) и создаёт
     страницу в Telegraph (с картинками из вложений).
+
+    Возвращает строку-«алерт» для вывода в шапке (в якоре), либо None.
+    НИЧЕГО не отправляет отдельными сообщениями в чат.
     """
     client = _get_telegraph_client()
     if client is None:
-        await bot.send_message(chat_id, "Telegraph не настроен (нужен TELEGRAPH_TOKEN).")
-        return
+        return "⚠️ Telegraph не настроен (нужен TELEGRAPH_TOKEN)."
 
     me = viewer_id
     q = await session.execute(
@@ -1271,8 +1158,7 @@ async def _build_admin_tgraph_for_period(
     tasks = q.scalars().all()
 
     if not tasks:
-        await bot.send_message(chat_id, "За выбранный период закрытых задач нет.")
-        return
+        return "⚠️ За выбранный период закрытых задач нет."
 
     if (end - start).days == 1:
         title_suffix = start.strftime("%d.%m.%Y")
@@ -1288,10 +1174,27 @@ async def _build_admin_tgraph_for_period(
     try:
         url = await client.create_tasks_page(title, tasks, bot=bot, session=session)
     except Exception as e:
-        await bot.send_message(chat_id, f"Не удалось создать отчёт в Telegraph: {e}")
-        return
+        return f"⚠️ Не удалось создать отчёт в Telegraph: {e}"
 
-    await bot.send_message(chat_id, f"Готово. Ваш отчёт {human}:\n{url}")
+    return f"✅ Готово. Ваш отчёт {human}:\n{url}"
+
+
+def _tgraph_root_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Сегодня", callback_data="a:tgraph:today")
+    kb.button(text="День", callback_data="a:tgraph:day")
+    kb.button(text="Неделя", callback_data="a:tgraph:week")
+    kb.button(text="Месяц", callback_data="a:tgraph:month")
+    kb.button(text="⬅️ Назад", callback_data="a:back_admin")
+    kb.adjust(2, 2, 1)
+    return kb.as_markup()
+
+
+def _tgraph_root_text(admin_id: int, alert: Optional[str] = None) -> str:
+    # внешний alert (из builder) имеет приоритет, иначе берём сохранённый
+    use_alert = alert if alert is not None else _tgraph_get_alert(admin_id)
+    base = "📄 <b>Telegraph-отчёт</b>\nВыберите период:"
+    return _with_alert(base, use_alert)
 
 
 def _tgraph_day_kb(year: int, month: int) -> InlineKeyboardMarkup:
@@ -1352,6 +1255,12 @@ def _tgraph_day_kb(year: int, month: int) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def _tgraph_day_text(year: int, month: int, admin_id: int, alert: Optional[str] = None) -> str:
+    use_alert = alert if alert is not None else _tgraph_get_alert(admin_id)
+    base = f"📅 Telegraph-отчёт (день)\n{_month_title(year, month)}\nВыберите дату."
+    return _with_alert(base, use_alert)
+
+
 def _tgraph_week_kb(year: int, month: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
 
@@ -1360,8 +1269,8 @@ def _tgraph_week_kb(year: int, month: int) -> InlineKeyboardMarkup:
 
     # центральная кнопка — актуальная неделя (пн–вс) без действия
     today = datetime.utcnow()
-    base = datetime(year=today.year, month=today.month, day=today.day)
-    monday = base - timedelta(days=base.weekday())
+    base_dt = datetime(year=today.year, month=today.month, day=today.day)
+    monday = base_dt - timedelta(days=base_dt.weekday())
     sunday = monday + timedelta(days=6)
     center_label = f"{monday.strftime('%d.%m')}-{sunday.strftime('%d.%m')}"
 
@@ -1396,6 +1305,12 @@ def _tgraph_week_kb(year: int, month: int) -> InlineKeyboardMarkup:
 
     kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="a:tgraph"))
     return kb.as_markup()
+
+
+def _tgraph_week_text(year: int, month: int, admin_id: int, alert: Optional[str] = None) -> str:
+    use_alert = alert if alert is not None else _tgraph_get_alert(admin_id)
+    base = f"📅 Telegraph-отчёт (неделя)\n{_month_title(year, month)}\nВыберите неделю (пн–вс)."
+    return _with_alert(base, use_alert)
 
 
 def _tgraph_month_kb(year: int) -> InlineKeyboardMarkup:
@@ -1436,6 +1351,12 @@ def _tgraph_month_kb(year: int) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def _tgraph_month_text(year: int, admin_id: int, alert: Optional[str] = None) -> str:
+    use_alert = alert if alert is not None else _tgraph_get_alert(admin_id)
+    base = f"📅 Telegraph-отчёт (месяц)\nГод: {year}\nВыберите месяц."
+    return _with_alert(base, use_alert)
+
+
 @router.callback_query(F.data == "a:tgraph")
 async def admin_tgraph_root(cb: CallbackQuery, bot: Bot) -> None:
     if not is_admin(cb.from_user.id):
@@ -1447,17 +1368,11 @@ async def admin_tgraph_root(cb: CallbackQuery, bot: Bot) -> None:
         await cb.answer("Telegraph не настроен (нужен TELEGRAPH_TOKEN).", show_alert=True)
         return
 
-    kb = InlineKeyboardBuilder()
-    kb.button(text="Сегодня", callback_data="a:tgraph:today")
-    kb.button(text="День", callback_data="a:tgraph:day")
-    kb.button(text="Неделя", callback_data="a:tgraph:week")
-    kb.button(text="Месяц", callback_data="a:tgraph:month")
-    kb.button(text="⬅️ Назад", callback_data="a:back_admin")
-    kb.adjust(2, 2, 1)
+    _tgraph_clear_alert(cb.from_user.id)
 
-    text = "📄 <b>Telegraph-отчёт</b>\nВыберите период:"
+    text = _tgraph_root_text(cb.from_user.id, alert=None)
     anchor = ADMIN_ANCHOR.get(cb.from_user.id)
-    new_id = await _show_anchor(bot, cb.from_user.id, text, kb.as_markup(), anchor)
+    new_id = await _show_anchor(bot, cb.from_user.id, text, _tgraph_root_kb(), anchor)
     ADMIN_ANCHOR[cb.from_user.id] = new_id
     await cb.answer()
 
@@ -1468,19 +1383,27 @@ async def admin_tgraph_today(cb: CallbackQuery, session: AsyncSession, bot: Bot)
         await cb.answer("Нет прав.", show_alert=True)
         return
 
+    _tgraph_clear_alert(cb.from_user.id)
+
     now = datetime.utcnow()
     start = datetime(year=now.year, month=now.month, day=now.day)
     end = start + timedelta(days=1)
 
-    await _build_admin_tgraph_for_period(
-        chat_id=cb.from_user.id,
+    alert = await _build_admin_tgraph_for_period(
         viewer_id=cb.from_user.id,
         session=session,
         bot=bot,
         start=start,
         end=end,
     )
-    await cb.answer("Готово")
+    _tgraph_set_alert(cb.from_user.id, alert)
+
+    # остаёмся на главном экране telegraph-отчётов и показываем алерт в шапке
+    text = _tgraph_root_text(cb.from_user.id)
+    anchor = ADMIN_ANCHOR.get(cb.from_user.id)
+    new_id = await _show_anchor(bot, cb.from_user.id, text, _tgraph_root_kb(), anchor)
+    ADMIN_ANCHOR[cb.from_user.id] = new_id
+    await cb.answer()
 
 
 @router.callback_query(F.data == "a:tgraph:day")
@@ -1489,9 +1412,11 @@ async def admin_tgraph_day_root(cb: CallbackQuery, bot: Bot) -> None:
         await cb.answer("Нет прав.", show_alert=True)
         return
 
+    _tgraph_clear_alert(cb.from_user.id)
+
     today = datetime.utcnow()
     year, month = today.year, today.month
-    text = f"📅 Telegraph-отчёт (день)\n{_month_title(year, month)}\nВыберите дату."
+    text = _tgraph_day_text(year, month, cb.from_user.id, alert=None)
     kb = _tgraph_day_kb(year, month)
     anchor = ADMIN_ANCHOR.get(cb.from_user.id)
     new_id = await _show_anchor(bot, cb.from_user.id, text, kb, anchor)
@@ -1505,6 +1430,8 @@ async def admin_tgraph_day_month(cb: CallbackQuery, bot: Bot) -> None:
         await cb.answer("Нет прав.", show_alert=True)
         return
 
+    _tgraph_clear_alert(cb.from_user.id)
+
     try:
         _, _, _, _, ym = (cb.data or "").split(":", 4)
         year_s, month_s = ym.split("-")
@@ -1513,7 +1440,7 @@ async def admin_tgraph_day_month(cb: CallbackQuery, bot: Bot) -> None:
         await cb.answer("Некорректный период.", show_alert=True)
         return
 
-    text = f"📅 Telegraph-отчёт (день)\n{_month_title(year, month)}\nВыберите дату."
+    text = _tgraph_day_text(year, month, cb.from_user.id, alert=None)
     kb = _tgraph_day_kb(year, month)
     anchor = ADMIN_ANCHOR.get(cb.from_user.id)
     new_id = await _show_anchor(bot, cb.from_user.id, text, kb, anchor)
@@ -1527,8 +1454,9 @@ async def admin_tgraph_day_pick(cb: CallbackQuery, session: AsyncSession, bot: B
         await cb.answer("Нет прав.", show_alert=True)
         return
 
+    _tgraph_clear_alert(cb.from_user.id)
+
     try:
-        # было split(":", 3) -> получали "pick:YYYY-MM-DD"
         date_s = (cb.data or "").split(":", 4)[-1]
         dt = datetime.strptime(date_s, "%Y-%m-%d")
     except Exception:
@@ -1538,15 +1466,23 @@ async def admin_tgraph_day_pick(cb: CallbackQuery, session: AsyncSession, bot: B
     start = datetime(year=dt.year, month=dt.month, day=dt.day)
     end = start + timedelta(days=1)
 
-    await _build_admin_tgraph_for_period(
-        chat_id=cb.from_user.id,
+    alert = await _build_admin_tgraph_for_period(
         viewer_id=cb.from_user.id,
         session=session,
         bot=bot,
         start=start,
         end=end,
     )
-    await cb.answer("Готово")
+    _tgraph_set_alert(cb.from_user.id, alert)
+
+    # остаёмся в календаре (месяц выбранной даты) и показываем алерт в шапке
+    year, month = dt.year, dt.month
+    text = _tgraph_day_text(year, month, cb.from_user.id)
+    kb = _tgraph_day_kb(year, month)
+    anchor = ADMIN_ANCHOR.get(cb.from_user.id)
+    new_id = await _show_anchor(bot, cb.from_user.id, text, kb, anchor)
+    ADMIN_ANCHOR[cb.from_user.id] = new_id
+    await cb.answer()
 
 
 @router.callback_query(F.data == "a:tgraph:week")
@@ -1555,9 +1491,11 @@ async def admin_tgraph_week_root(cb: CallbackQuery, bot: Bot) -> None:
         await cb.answer("Нет прав.", show_alert=True)
         return
 
+    _tgraph_clear_alert(cb.from_user.id)
+
     today = datetime.utcnow()
     year, month = today.year, today.month
-    text = f"📅 Telegraph-отчёт (неделя)\n{_month_title(year, month)}\nВыберите неделю (пн–вс)."
+    text = _tgraph_week_text(year, month, cb.from_user.id, alert=None)
     kb = _tgraph_week_kb(year, month)
     anchor = ADMIN_ANCHOR.get(cb.from_user.id)
     new_id = await _show_anchor(bot, cb.from_user.id, text, kb, anchor)
@@ -1571,6 +1509,8 @@ async def admin_tgraph_week_month(cb: CallbackQuery, bot: Bot) -> None:
         await cb.answer("Нет прав.", show_alert=True)
         return
 
+    _tgraph_clear_alert(cb.from_user.id)
+
     try:
         _, _, _, _, ym = (cb.data or "").split(":", 4)
         year_s, month_s = ym.split("-")
@@ -1579,7 +1519,7 @@ async def admin_tgraph_week_month(cb: CallbackQuery, bot: Bot) -> None:
         await cb.answer("Некорректный период.", show_alert=True)
         return
 
-    text = f"📅 Telegraph-отчёт (неделя)\n{_month_title(year, month)}\nВыберите неделю (пн–вс)."
+    text = _tgraph_week_text(year, month, cb.from_user.id, alert=None)
     kb = _tgraph_week_kb(year, month)
     anchor = ADMIN_ANCHOR.get(cb.from_user.id)
     new_id = await _show_anchor(bot, cb.from_user.id, text, kb, anchor)
@@ -1593,8 +1533,9 @@ async def admin_tgraph_week_pick(cb: CallbackQuery, session: AsyncSession, bot: 
         await cb.answer("Нет прав.", show_alert=True)
         return
 
+    _tgraph_clear_alert(cb.from_user.id)
+
     try:
-        # было split(":", 3) -> "pick:YYYY-MM-DD"
         date_s = (cb.data or "").split(":", 4)[-1]
         monday = datetime.strptime(date_s, "%Y-%m-%d")
     except Exception:
@@ -1604,15 +1545,23 @@ async def admin_tgraph_week_pick(cb: CallbackQuery, session: AsyncSession, bot: 
     start = monday
     end = monday + timedelta(days=7)
 
-    await _build_admin_tgraph_for_period(
-        chat_id=cb.from_user.id,
+    alert = await _build_admin_tgraph_for_period(
         viewer_id=cb.from_user.id,
         session=session,
         bot=bot,
         start=start,
         end=end,
     )
-    await cb.answer("Готово")
+    _tgraph_set_alert(cb.from_user.id, alert)
+
+    # перерисуем недельный экран (месяц от monday) и покажем алерт в шапке
+    year, month = monday.year, monday.month
+    text = _tgraph_week_text(year, month, cb.from_user.id)
+    kb = _tgraph_week_kb(year, month)
+    anchor = ADMIN_ANCHOR.get(cb.from_user.id)
+    new_id = await _show_anchor(bot, cb.from_user.id, text, kb, anchor)
+    ADMIN_ANCHOR[cb.from_user.id] = new_id
+    await cb.answer()
 
 
 @router.callback_query(F.data == "a:tgraph:month")
@@ -1621,8 +1570,10 @@ async def admin_tgraph_month_root(cb: CallbackQuery, bot: Bot) -> None:
         await cb.answer("Нет прав.", show_alert=True)
         return
 
+    _tgraph_clear_alert(cb.from_user.id)
+
     year = datetime.utcnow().year
-    text = f"📅 Telegraph-отчёт (месяц)\nГод: {year}\nВыберите месяц."
+    text = _tgraph_month_text(year, cb.from_user.id, alert=None)
     kb = _tgraph_month_kb(year)
     anchor = ADMIN_ANCHOR.get(cb.from_user.id)
     new_id = await _show_anchor(bot, cb.from_user.id, text, kb, anchor)
@@ -1636,13 +1587,15 @@ async def admin_tgraph_month_year(cb: CallbackQuery, bot: Bot) -> None:
         await cb.answer("Нет прав.", show_alert=True)
         return
 
+    _tgraph_clear_alert(cb.from_user.id)
+
     try:
         year = int((cb.data or "").split(":")[-1])
     except Exception:
         await cb.answer("Некорректный год.", show_alert=True)
         return
 
-    text = f"📅 Telegraph-отчёт (месяц)\nГод: {year}\nВыберите месяц."
+    text = _tgraph_month_text(year, cb.from_user.id, alert=None)
     kb = _tgraph_month_kb(year)
     anchor = ADMIN_ANCHOR.get(cb.from_user.id)
     new_id = await _show_anchor(bot, cb.from_user.id, text, kb, anchor)
@@ -1656,8 +1609,9 @@ async def admin_tgraph_month_pick(cb: CallbackQuery, session: AsyncSession, bot:
         await cb.answer("Нет прав.", show_alert=True)
         return
 
+    _tgraph_clear_alert(cb.from_user.id)
+
     try:
-        # было split(":", 3) -> "pick:YYYY-MM"
         ym = (cb.data or "").split(":", 4)[-1]
         year_s, month_s = ym.split("-")
         year, month = int(year_s), int(month_s)
@@ -1671,15 +1625,22 @@ async def admin_tgraph_month_pick(cb: CallbackQuery, session: AsyncSession, bot:
     else:
         end = datetime(year=year, month=month + 1, day=1)
 
-    await _build_admin_tgraph_for_period(
-        chat_id=cb.from_user.id,
+    alert = await _build_admin_tgraph_for_period(
         viewer_id=cb.from_user.id,
         session=session,
         bot=bot,
         start=start,
         end=end,
     )
-    await cb.answer("Готово")
+    _tgraph_set_alert(cb.from_user.id, alert)
+
+    # остаёмся на выборе месяцев того же года и показываем алерт
+    text = _tgraph_month_text(year, cb.from_user.id)
+    kb = _tgraph_month_kb(year)
+    anchor = ADMIN_ANCHOR.get(cb.from_user.id)
+    new_id = await _show_anchor(bot, cb.from_user.id, text, kb, anchor)
+    ADMIN_ANCHOR[cb.from_user.id] = new_id
+    await cb.answer()
 
 
 @router.callback_query(F.data == "a:tgraph:nop")
@@ -1688,8 +1649,6 @@ async def admin_tgraph_nop(cb: CallbackQuery) -> None:
 
 
 # ===================== Прочее =====================
-
-
 @router.callback_query(F.data == "a:nop")
 async def noop(cb: CallbackQuery) -> None:
     await cb.answer()

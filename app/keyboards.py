@@ -21,18 +21,18 @@ USER_CATEGORIES: list[tuple[str, str, str]] = [
 ]
 
 STATUS_EMOJI = {
-    "NEW": "📨 Отправлен",
-    "ACCEPTED": "🛠️ В работе",
-    "IN_PROGRESS": "🛠️ В работе",
-    "CLOSED": "✅ Завершён",
+    "NEW": "📨 Отправлен 📨",
+    "ACCEPTED": "🛠️ В работе 🛠️",
+    "IN_PROGRESS": "🛠️ В работе 🛠️",
+    "CLOSED": "✅ Завершён ✅",
 }
 
 
 def user_main_menu() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="🆕 Новая заявка", callback_data="u:new")
-    kb.button(text="📚 История", callback_data="u:history:p:1")
-    kb.button(text="👤 Профиль", callback_data="u:profile")
+    kb.button(text="✉️ Новая заявка ✉️", callback_data="u:new")
+    kb.button(text="📚 История 📚", callback_data="u:history:p:1")
+    kb.button(text="👤 Профиль 👤", callback_data="u:profile")
     kb.adjust(1, 1, 1)
     return kb.as_markup()
 
@@ -41,22 +41,22 @@ def categories_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for title, emoji, slug in USER_CATEGORIES:
         kb.button(text=f"{emoji} {title}", callback_data=f"u:cat:{slug}")
-    kb.button(text="⬅️ Назад", callback_data="u:back")
+    kb.button(text="🔙 Назад", callback_data="u:back")
     kb.adjust(2, 2, 2, 2, 2, 1)
     return kb.as_markup()
 
 
 def done_cancel_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="Готово ✅", callback_data="done_collect")
-    kb.button(text="Отмена ❌", callback_data="cancel_collect")
+    kb.button(text="✅ Готово ✅", callback_data="done_collect")
+    kb.button(text="❌ Отмена ❌", callback_data="cancel_collect")
     kb.adjust(2)
     return kb.as_markup()
 
 
 def cancel_only_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="Отмена ❌", callback_data="cancel_collect")
+    kb.button(text="❌ Отмена ❌", callback_data="cancel_collect")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -78,8 +78,8 @@ def reg_confirm_kb() -> InlineKeyboardMarkup:
     kb.button(text="✏️ Изменить SIP", callback_data="reg:edit_sip")
     kb.button(text="✏️ Изменить ФИО", callback_data="reg:edit_name")
     # 2-я строка: Отменить | Подтвердить
-    kb.button(text="❌ Отменить", callback_data="reg:cancel")
-    kb.button(text="✅ Подтвердить", callback_data="reg:confirm")
+    kb.button(text="❌ Отменить ❌", callback_data="reg:cancel")
+    kb.button(text="✅ Подтвердить ✅", callback_data="reg:confirm")
     kb.adjust(2, 2)
     return kb.as_markup()
 
@@ -89,10 +89,10 @@ def reg_confirm_kb() -> InlineKeyboardMarkup:
 
 def admin_menu() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="Мои задачи", callback_data="a:list")
-    kb.button(text="Добавить себе...", callback_data="a:add")
-    kb.button(text="Статистика", callback_data="a:stats")
-    kb.button(text="📄 Отчёт (Telegraph)", callback_data="a:tgraph")
+    kb.button(text="✅  Задачи  ✅", callback_data="a:list")
+    kb.button(text="➕ Добавить ➕", callback_data="a:add")
+    kb.button(text="🗂️  Заявки  🗂️", callback_data="a:stats")
+    kb.button(text="📄   Отчёт  📄", callback_data="a:tgraph")
     kb.adjust(1, 1, 1, 1)
     return kb.as_markup()
 
@@ -128,23 +128,23 @@ def report_finish_kb(task_id: int) -> InlineKeyboardMarkup:
 
 def admin_task_actions_kb(task_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="✅ Взять в работу", callback_data=f"a:task:claim:{task_id}")
-    kb.button(text="🙈 Скрыть", callback_data=f"a:task:hide:{task_id}")
-    kb.button(text="⬅️ Назад", callback_data="a:back")
+    kb.button(text="✅ Взять в работу ✅", callback_data=f"a:task:claim:{task_id}")
+    kb.button(text="🙈 Скрыть 🙈", callback_data=f"a:task:hide:{task_id}")
+    kb.button(text="🔙 Назад 🔙", callback_data="a:back")
     kb.adjust(1, 1, 1)
     return kb.as_markup()
 
 
 def admin_task_claimed_kb(task_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="⬅️ Назад", callback_data="a:back")
+    kb.button(text="🔙 Назад 🔙", callback_data="a:back")
     kb.adjust(1)
     return kb.as_markup()
 
 
 def admin_back_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="⬅️ Назад", callback_data="a:back")
+    kb.button(text="🔙 Назад 🔙", callback_data="a:back")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -153,9 +153,9 @@ def admin_back_kb() -> InlineKeyboardMarkup:
 
 def boss_menu() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="🆕 Назначить задачу", callback_data="b:new")
-    kb.button(text="📊 Статистика", callback_data="b:stats")
-    kb.button(text="☀️ Отпуски", callback_data="b:vac")
+    kb.button(text="🆕 Назначить задачу 🆕", callback_data="b:new")
+    kb.button(text="📊 Статистика 📊", callback_data="b:stats")
+    kb.button(text="☀️ Отпуски ☀️", callback_data="b:vac")
     kb.adjust(2, 1)
     return kb.as_markup()
 
@@ -186,15 +186,15 @@ def vacation_kb(
 ) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(
-        text=f"👨‍💻 Артур — {'☀️ отпуск' if artur_on_vac else '🟢 работает'}",
+        text=f"👨‍💻 Артур — {'☀️ отпуск ☀️' if artur_on_vac else '🟢 работает'}",
         callback_data=f"b:toggle_vac:{artur_id}",
     )
     kb.button(
-        text=f"🧑‍💻 Андрей К. — {'☀️ отпуск' if andrey_on_vac else '🟢 работает'}",
+        text=f"🧑‍💻 Андрей К. — {'☀️ отпуск ☀️' if andrey_on_vac else '🟢 работает'}",
         callback_data=f"b:toggle_vac:{andrey_id}",
     )
     if with_back:
-        kb.button(text="🔙 Назад", callback_data="b:back")
+        kb.button(text="🔙 Назад 🔙", callback_data="b:back")
         kb.adjust(1, 1, 1)
     else:
         kb.adjust(1, 1)

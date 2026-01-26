@@ -8,11 +8,14 @@ from datetime import datetime, date
 import json
 from io import BytesIO
 import logging
+import mimetypes
+import os
 
 import aiohttp
 from aiogram import Bot
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from html import escape
 
 from app.models import Task, Attachment
 
@@ -37,13 +40,26 @@ class TelegraphClient:
     # ============ низкоуровневые запросы ============
 
     async def _request(self, method: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Telegraph API иногда отвечает не строго application/json.
+        Поэтому читаем text и пробуем json.loads.
+        """
         url = f"{TELEGRAPH_API_URL}/{method}"
         async with aiohttp.ClientSession() as session:
             async with session.post(url, data=params) as resp:
-                data = await resp.json()
+                raw = await resp.text()
+
+        try:
+            data = json.loads(raw)
+        except Exception:
+            raise RuntimeError(f"Telegraph error: cannot decode JSON. raw={raw[:200]!r}")
+
         if not data.get("ok"):
             raise RuntimeError(f"Telegraph error: {data.get('error')}")
-        return data["result"]
+        result = data.get("result")
+        if not isinstance(result, dict):
+            raise RuntimeError(f"Telegraph error: invalid result payload: {result!r}")
+        return result
 
     async def _upload_telegram_file(self, bot: Bot, file_id: str) -> Optional[str]:
         """
@@ -55,17 +71,31 @@ class TelegraphClient:
             tg_file = await bot.get_file(file_id)
 
             buf = BytesIO()
-            # aiogram 3.x: bot.download(file, destination=...)
-            await bot.download(tg_file, destination=buf)
-            buf.seek(0)
+
+            # aiogram 3.x: чаще всего bot.download(file, destination=...)
+            try:
+                await bot.download(tg_file, destination=buf)
+            except TypeError:
+                file_path = getattr(tg_file, "file_path", None)
+                if not file_path:
+                    raise RuntimeError("Telegram returned empty file_path for this file_id")
+                await bot.download_file(file_path, destination=buf)
+
+            content = buf.getvalue()
+
+            # filename (если есть file_path — возьмём расширение)
+            file_path = getattr(tg_file, "file_path", None) or ""
+            filename = os.path.basename(file_path) or "file"
+            ext = os.path.splitext(filename)[-1].lower()
+            content_type = mimetypes.types_map.get(ext, "application/octet-stream")
 
             # 2) шлём в Telegraph
             form = aiohttp.FormData()
             form.add_field(
                 "file",
-                buf,
-                filename="file",
-                content_type="application/octet-stream",
+                content,
+                filename=filename,
+                content_type=content_type,
             )
 
             async with aiohttp.ClientSession() as session:
@@ -74,18 +104,16 @@ class TelegraphClient:
                     try:
                         data = json.loads(text)
                     except json.JSONDecodeError:
-                        logger.error(
-                            "Telegraph upload: JSON decode error, response text=%r",
-                            text,
-                        )
+                        logger.error("Telegraph upload: JSON decode error, response text=%r", text)
                         return None
 
             # формат ответа Telegraph: [{"src": "/file/xxxx.jpg"}] либо {"error": "..."}
-            if isinstance(data, list) and data and "src" in data[0]:
+            if isinstance(data, list) and data and isinstance(data[0], dict) and "src" in data[0]:
                 src = data[0]["src"]
-                if src.startswith("http"):
-                    return src
-                return "https://telegra.ph" + src
+                if isinstance(src, str):
+                    if src.startswith("http"):
+                        return src
+                    return "https://telegra.ph" + src
 
             logger.error("Telegraph upload: unexpected response %r", data)
             return None
@@ -122,6 +150,7 @@ class TelegraphClient:
             "Интернет": "🌐",
             "Мобильная связь": "📶",
             "1С": "🧾",
+            "1C": "🧾",
             "Удаленка": "🏠",
             "Удалёнка": "🏠",
             "Принтер": "🖨",
@@ -160,25 +189,15 @@ class TelegraphClient:
                 day_title = group_date.strftime("📅 %d.%m.%Y")
             else:
                 day_title = "📅 Без даты создания"
-            content.append({"tag": "h2", "children": [day_title]})
+            content.append({"tag": "h2", "children": [escape(day_title)]})
 
             # заявки за день
             for task in day_tasks:
                 created_at = getattr(task, "created_at", None)
-                closed_at = getattr(task, "closed_at", None) or getattr(
-                    task, "updated_at", None
-                )
+                closed_at = getattr(task, "closed_at", None) or getattr(task, "updated_at", None)
 
-                created_str = (
-                    created_at.strftime("%d.%m.%Y %H:%M")
-                    if isinstance(created_at, datetime)
-                    else "—"
-                )
-                closed_str = (
-                    closed_at.strftime("%d.%m.%Y %H:%M")
-                    if isinstance(closed_at, datetime)
-                    else "—"
-                )
+                created_str = created_at.strftime("%d.%m.%Y %H:%M") if isinstance(created_at, datetime) else "—"
+                closed_str = closed_at.strftime("%d.%m.%Y %H:%M") if isinstance(closed_at, datetime) else "—"
 
                 # длительность
                 duration_str = "—"
@@ -236,7 +255,7 @@ class TelegraphClient:
                 else:
                     header_text = f"🧾 Заявка №{task.id} — {category}"
 
-                content.append({"tag": "h3", "children": [header_text]})
+                content.append({"tag": "h3", "children": [escape(header_text)]})
 
                 # основные поля
                 details_items: List[str] = []
@@ -254,10 +273,7 @@ class TelegraphClient:
                 content.append(
                     {
                         "tag": "ul",
-                        "children": [
-                            {"tag": "li", "children": [item]}
-                            for item in details_items
-                        ],
+                        "children": [{"tag": "li", "children": [escape(item)]} for item in details_items],
                     }
                 )
 
@@ -266,14 +282,12 @@ class TelegraphClient:
                     content.append(
                         {
                             "tag": "p",
-                            "children": [f"📝 Описание:\n{task.description}"],
+                            "children": [escape(f"📝 Описание:\n{task.description}")],
                         }
                     )
 
                 # вложения
-                ares = await session.execute(
-                    select(Attachment).where(Attachment.task_id == task.id)
-                )
+                ares = await session.execute(select(Attachment).where(Attachment.task_id == task.id))
                 attachments: List[Attachment] = list(ares.scalars().all())
 
                 for att in attachments:
@@ -284,9 +298,7 @@ class TelegraphClient:
                         content.append(
                             {
                                 "tag": "p",
-                                "children": [
-                                    f"⚠️ Не удалось загрузить вложение ({att.file_type})."
-                                ],
+                                "children": [escape(f"⚠️ Не удалось загрузить вложение ({att.file_type}).")],
                             }
                         )
                         continue
@@ -294,19 +306,11 @@ class TelegraphClient:
                     if att.file_type == "photo":
                         node: Dict[str, Any] = {
                             "tag": "figure",
-                            "children": [
-                                {
-                                    "tag": "img",
-                                    "attrs": {"src": url},
-                                }
-                            ],
+                            "children": [{"tag": "img", "attrs": {"src": url}}],
                         }
                         if att.caption:
                             node["children"].append(
-                                {
-                                    "tag": "figcaption",
-                                    "children": [att.caption],
-                                }
+                                {"tag": "figcaption", "children": [escape(att.caption)]}
                             )
                         content.append(node)
 
@@ -318,8 +322,8 @@ class TelegraphClient:
                                 "children": [
                                     {
                                         "tag": "a",
-                                            "attrs": {"href": url},
-                                            "children": [link_text],
+                                        "attrs": {"href": url},
+                                        "children": [escape(link_text)],
                                     }
                                 ],
                             }
@@ -334,7 +338,7 @@ class TelegraphClient:
                                     {
                                         "tag": "a",
                                         "attrs": {"href": url},
-                                        "children": [link_text],
+                                        "children": [escape(link_text)],
                                     }
                                 ],
                             }
@@ -349,7 +353,7 @@ class TelegraphClient:
                                     {
                                         "tag": "a",
                                         "attrs": {"href": url},
-                                        "children": [link_text],
+                                        "children": [escape(link_text)],
                                     }
                                 ],
                             }
@@ -361,7 +365,7 @@ class TelegraphClient:
         # ===== Итоги периода =====
         total_tasks = len(tasks)
         if total_tasks:
-            content.append({"tag": "h3", "children": ["📊 Итоги периода"]})
+            content.append({"tag": "h3", "children": [escape("📊 Итоги периода")]})
 
             summary_lines: List[str] = [f"📌 Всего закрытых заявок: {total_tasks}"]
 
@@ -374,32 +378,26 @@ class TelegraphClient:
                     avg_duration_str = f"{avg_hours} ч {avg_minutes} мин"
                 else:
                     avg_duration_str = f"{avg_minutes} мин"
-                summary_lines.append(
-                    f"⏱ Среднее время выполнения: {avg_duration_str}"
-                )
+                summary_lines.append(f"⏱ Среднее время выполнения: {avg_duration_str}")
 
             if complexities:
                 avg_complexity = sum(complexities) / len(complexities)
-                summary_lines.append(
-                    f"⭐ Средняя сложность задач: {avg_complexity:.1f}/10"
-                )
+                summary_lines.append(f"⭐ Средняя сложность задач: {avg_complexity:.1f}/10")
 
             content.append(
                 {
                     "tag": "ul",
-                    "children": [
-                        {"tag": "li", "children": [line]}
-                        for line in summary_lines
-                    ],
+                    "children": [{"tag": "li", "children": [escape(line)]} for line in summary_lines],
                 }
             )
 
         # ===== создание страницы =====
-        params = {
+        params: Dict[str, Any] = {
             "access_token": self.config.access_token,
             "title": title,
             "author_name": self.config.author_name,
             "content": json.dumps(content, ensure_ascii=False),
+            "return_content": "false",
         }
         if self.config.author_url:
             params["author_url"] = self.config.author_url
@@ -409,4 +407,4 @@ class TelegraphClient:
         if not url:
             path = result.get("path", "")
             url = f"https://telegra.ph/{path}"
-        return url
+        return str(url)
