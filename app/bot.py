@@ -1,6 +1,7 @@
-# app/bot.py
+# C:\HardyBot\app\bot.py
 import asyncio
 import logging
+import sys
 from datetime import datetime
 
 from aiogram import Bot, Dispatcher
@@ -23,13 +24,35 @@ from app.middlewares.db_session import DBSessionMiddleware
 from app.middlewares.logging import LoggingMiddleware
 from app.utils.uptime import UptimePrinter, format_dt, format_uptime
 
-# Инициализация логирования должна происходить как можно раньше
 setup_logging(log_dir="logs", log_file="bot.log", level="INFO", max_mb=50, backup_count=10)
+
+log = logging.getLogger(__name__)
+
+
+def _stdout_supports_utf8() -> bool:
+    """
+    NSSM/служба часто запускаются с cp1251/stdout без поддержки Unicode.
+    В таком режиме печать баннеров приводит к UnicodeEncodeError.
+    """
+    enc = getattr(sys.stdout, "encoding", None) or ""
+    enc = enc.lower()
+    return "utf-8" in enc or "utf8" in enc
+
+
+def _safe_print(text: str) -> None:
+    """
+    Безопасная печать: не роняет процесс, если stdout не умеет Unicode.
+    """
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        log.info("Console does not support Unicode output; banner output skipped.")
 
 
 def print_bot_started(staff_ids: set[int]) -> None:
-    print(
-        """
+    if _stdout_supports_utf8():
+        _safe_print(
+            """
 ██████╗  ██████╗ ████████╗
 ██╔══██╗██╔═══██╗╚══██╔══╝
 ██████╔╝██║   ██║   ██║
@@ -44,14 +67,17 @@ def print_bot_started(staff_ids: set[int]) -> None:
 ███████║   ██║   ██║  ██║██║  ██║   ██║   ███████╗██████╔╝
 ╚══════╝   ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═════╝
 """
-    )
-    print(f"[DBG] staff_ids: {staff_ids}")
-    print("-" * 50)
+        )
+        _safe_print(f"[DBG] staff_ids: {staff_ids}")
+        _safe_print("-" * 50)
+
+    log.info("Bot starting. staff_ids=%s", staff_ids)
 
 
 def print_bot_stopped() -> None:
-    print(
-        """
+    if _stdout_supports_utf8():
+        _safe_print(
+            """
 ██████╗  ██████╗ ████████╗
 ██╔══██╗██╔═══██╗╚══██╔══╝
 ██████╔╝██║   ██║   ██║
@@ -66,7 +92,9 @@ def print_bot_stopped() -> None:
 ███████║   ██║   ╚██████╔╝██║     ██║     ███████╗██████╔╝
 ╚══════╝   ╚═╝    ╚═════╝ ╚═╝     ╚═╝     ╚══════╝╚═════╝
 """
-    )
+        )
+
+    log.info("Bot stopped.")
 
 
 async def _apply_simple_migrations():
@@ -112,11 +140,10 @@ async def on_startup(bot: Bot):
             BotCommand(command="help", description="Справка"),
         ]
     )
-    logging.getLogger(__name__).info("Startup complete. ENV=%s", settings.ENV)
+    log.info("Startup complete. ENV=%s", settings.ENV)
 
 
 def setup_middlewares(dp: Dispatcher):
-    # Логирование должно стоять максимально рано, чтобы видеть всё, что прилетает
     dp.message.middleware(LoggingMiddleware())
     dp.callback_query.middleware(LoggingMiddleware())
 
@@ -159,8 +186,6 @@ async def main() -> None:
 
     try:
         await on_startup(bot)
-
-        # При Ctrl+C polling часто завершается через CancelledError — это штатно.
         try:
             await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
         except asyncio.CancelledError:
@@ -175,14 +200,18 @@ async def main() -> None:
         finished_at = datetime.now().astimezone()
         worked_sec = int((finished_at - started_at).total_seconds())
 
-        print(f"Started at : {format_dt(started_at)}")
-        print(f"Stopped at : {format_dt(finished_at)}")
-        print(f"Worked     : {format_uptime(worked_sec)}")
+        if _stdout_supports_utf8():
+            _safe_print(f"Started at : {format_dt(started_at)}")
+            _safe_print(f"Stopped at : {format_dt(finished_at)}")
+            _safe_print(f"Worked     : {format_uptime(worked_sec)}")
+
+        log.info("Started at : %s", format_dt(started_at))
+        log.info("Stopped at : %s", format_dt(finished_at))
+        log.info("Worked     : %s", format_uptime(worked_sec))
 
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        # подавляем traceback при Ctrl+C (логика остановки уже в finally внутри main)
         pass
